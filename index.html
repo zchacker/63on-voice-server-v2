@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Audio Room Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+  <h1>Audio Room Chat</h1>
+  <button onclick="joinRoom()">Join Room</button>
+  <div id="remoteAudioContainer"></div>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.0/simplepeer.min.js"></script>
+  <script>
+    const socket = io('http://localhost:3000');
+    const roomId = 'audio_room';
+    let localStream;
+    const peers = {};
+
+    function joinRoom() {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          console.log('Local stream captured');
+          localStream = stream;
+          socket.emit('join-room', roomId);
+          
+          socket.on('user-connected', userId => {
+            console.log('User connected:', userId);
+            connectToNewUser(userId, stream, false);
+          });
+
+          socket.on('signal', async (data) => {
+            const peer = peers[data.from];
+            if (peer) {
+              peer.signal(data.signal);
+            } else {
+              const newPeer = connectToNewUser(data.from, localStream, true);
+              newPeer.signal(data.signal);
+            }
+          });
+
+          socket.on('user-disconnected', userId => {
+            if (peers[userId]) peers[userId].destroy();
+            delete peers[userId];
+            console.log('User disconnected:', userId);
+          });
+
+          // Play local audio for debugging
+          const audioElement = document.createElement('audio');
+          audioElement.srcObject = stream;
+          audioElement.autoplay = true;
+          document.body.appendChild(audioElement);
+        })
+        .catch(error => {
+          console.error('Error accessing media devices.', error);
+        });
+    }
+
+    function connectToNewUser(userId, stream, isInitiator) {
+      const peer = new SimplePeer({
+        initiator: isInitiator,
+        trickle: false,
+        stream: stream
+      });
+
+      peer.on('signal', signal => {
+        socket.emit('signal', { to: userId, from: socket.id, signal: signal });
+      });
+
+      peer.on('stream', remoteStream => {
+        console.log('Received remote stream from', userId);
+        const audioElement = document.createElement('audio');
+        audioElement.srcObject = remoteStream;
+        audioElement.autoplay = true;
+        document.getElementById('remoteAudioContainer').appendChild(audioElement);
+      });
+
+      peer.on('error', err => {
+        console.error('Peer error:', err);
+      });
+
+      peer.on('close', () => {
+        console.log('Connection closed with', userId);
+        if (peers[userId]) peers[userId].destroy();
+        delete peers[userId];
+      });
+
+      peers[userId] = peer;
+      return peer;
+    }
+  </script>
+</body>
+</html>

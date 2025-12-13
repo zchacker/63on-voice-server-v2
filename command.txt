@@ -1,0 +1,6 @@
+npm install node-opus
+
+npm install @discordjs/opus
+
+
+npm install --global --production windows-build-tools
