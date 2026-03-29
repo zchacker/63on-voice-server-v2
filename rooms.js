@@ -63,6 +63,14 @@ io.on('connection', (socket) => {
         })
     })
 
+    socket.on('sendGift', (gift) => {
+        const roomId = socket.roomId
+        io.to(roomId).emit('sendGift', {
+            gift: gift,
+            user: socket.user
+        })
+    })
+
     // start speaking -> request mic    
     socket.on('requestMic', ({ spotNumber }) => {
         const roomId = socket.roomId
