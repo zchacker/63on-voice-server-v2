@@ -30,7 +30,8 @@ io.on('connection', (socket) => {
         socket.roomId = roomId
         socket.user = user
 
-        user.userId = socket.id // this is requiered
+        //user.userId = socket.id // this is requiered
+        user.socketId = socket.id
 
         const users = liveRooms.get(roomId)
         users.add(JSON.stringify(user)) // store user as string to use Set        
