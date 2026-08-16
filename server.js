@@ -1,36 +1,21 @@
-const express = require('express');
 const http = require('http');
-const socketIo = require('socket.io');
+const { Server } = require('socket.io');
 
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
+const socketEvents = require('./socket');
 
-const PORT = 3000;
+const server = http.createServer();
 
-app.use(express.static('public'));
-
-app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/index.html');
+const io = new Server(server, {
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST']
+    }
 });
 
-io.on('connection', (socket) => {
-  console.log('New client connected', socket.id);
+socketEvents(io);// resgiter all socket events
 
-  socket.on('join-room', (roomId) => {
-    socket.join(roomId);
-    socket.to(roomId).emit('user-connected', socket.id);    
-
-    socket.on('disconnect', () => {
-      socket.to(roomId).emit('user-disconnected', socket.id);
-    });
-
-    socket.on('signal', (data) => {
-      io.to(data.to).emit('signal', data);
-    });
-  });
-});
+const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+    console.log(`Socket server running on port ${PORT}`);
 });
