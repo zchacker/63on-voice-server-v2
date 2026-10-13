@@ -21,8 +21,8 @@ async function joinRoom(io, socket, { roomId, user }) {
     users.add(JSON.stringify(user)) // store user as string to use Set        
 
     console.log("users joined");
-    //console.log("users joined: " + socket.id + " room users: " + users.size + " total rooms : " + liveRooms.size);
-    //console.log("list of users: " + JSON.stringify(Array.from(users).map(u => JSON.parse(u)), null, 2));
+    console.log("users joined: " + socket.id + " room users: " + users.size + " total rooms : " + liveRooms.size);
+    console.log("list of users: " + JSON.stringify(Array.from(users).map(u => JSON.parse(u)), null, 2));
 
     // send updated user list to everyone in room
     io.to(roomId).emit('userList', Array.from(users).map(u => JSON.parse(u)))

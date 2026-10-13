@@ -7,8 +7,8 @@ module.exports = (io) => {
     io.on('connection', (socket) => {
 
         roomEvents(io, socket);
-        chatEvents(io, socket);
-        giftEvents(io, socket);
+        //chatEvents(io, socket);
+        //giftEvents(io, socket);
 
     });
 
