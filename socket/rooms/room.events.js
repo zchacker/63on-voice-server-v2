@@ -1,22 +1,19 @@
-
 const roomService = require('./room.service');
 
 module.exports = (io, socket) => {
-
-    socket.on('joinRoom', async (data) => {
-        await roomService.joinRoom(io, socket, data);
+    socket.on('joinRoom', (data) => {
+        roomService.joinRoom(io, socket, data);
     });
 
-    socket.on('leaveRoom', async (data) => {
-        await roomService.leaveRoom(io, socket, data);
+    socket.on('requestMic', (data) => {
+        roomService.requestMic(io, socket, data);
     });
 
-    socket.on('takeMic', async (data) => {
-        await roomService.takeMic(io, socket, data);
+    socket.on('leaveMic', (data) => {
+        roomService.leaveMic(io, socket, data);
     });
 
-    socket.on('leaveMic', async (data) => {
-        await roomService.leaveMic(io, socket, data);
+    socket.on('audioData', (data) => {
+        roomService.audioData(io, socket, data);
     });
-    
 };
