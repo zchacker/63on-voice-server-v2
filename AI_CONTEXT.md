@@ -49,7 +49,7 @@ Moderation commands all return moderationResult {action,success,code,message,roo
 - promoteFixedModerator {roomId,targetUserId}
 - muteMic / unmuteMic {roomId,targetUserId}
 - lockMessages / unlockMessages {roomId}
-Room and target notifications are fully documented in FRONTEND_SOCKET_API.md and FRONTEND_SOCKET_API.en.md. Keep both files synchronized with code.
+The authoritative event-by-event references are in docs/socket-api/en/ and docs/socket-api/ar/. FRONTEND_SOCKET_API.md and FRONTEND_SOCKET_API.en.md are short entrypoints to those indexes. Keep the per-event pages synchronized with code.
 
 ## Moderation state and persistence
 Bans, moderator roles, mic mutes and chat locks are held in socket/moderation/moderation.state.js maps/sets. They survive room exit as applicable but are lost on process restart and are not shared between multiple Node workers.
