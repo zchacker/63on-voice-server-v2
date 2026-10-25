@@ -1,128 +1,138 @@
-# Socket.IO API للواجهة الأمامية
+# Socket.IO API لمطور الواجهة
 
-هذه الوثيقة تصف السلوك الموجود حاليًا في الخادم. استخدمها كمرجع للتكامل، واقرأ قسم القيود قبل اعتماد الأحداث المرتبطة بإزالة المستخدم أو الصوت.
+هذا الدليل يشرح أحداث Socket.IO الحالية مع حقول الإدخال والإخراج. أسماء الأحداث والحقول البرمجية حساسة لحالة الأحرف.
 
-## الاتصال
+## الاتصال والمصادقة
 
-- البروتوكول: Socket.IO (يعتمد على Engine.IO؛ ليس WebSocket خامًا).
-- العنوان: `http://<HOST>:<PORT>` أو `https://<HOST>:<PORT>` بحسب إعداد الاستضافة.
-- المنفذ الافتراضي: `3000`، ويمكن تغييره عبر `PORT`.
-- لا توجد مصادقة أو بيانات handshake مطلوبة حاليًا.
-- إعداد CORS الحالي يسمح بجميع origins.
+- العنوان: http://<HOST>:<PORT> أو https://<HOST>:<PORT>، والمنفذ الافتراضي 3000.
+- أرسل JWT في handshake عبر auth.token، وليس في عنوان URL.
+- الاتصال العادي دون token مسموح حاليًا. صلاحيات الإشراف تتطلب JWT موقعًا بخوارزمية HS256، ويجب أن يحمل sub معرف المستخدم.
+- إعدادات الخادم: SOCKET_JWT_SECRET لسر التوقيع، وSOCKET_ROOT_MODERATOR_IDS لقائمة معرفات مشرفي الجذر مفصولة بفواصل.
+- عند وجود JWT صالح، يعتمد الخادم sub كمعرف للمستخدم ويستبدل به user.userId المرسل في joinRoom.
+- يوصى بإرسال JWT لكل مستخدم لضمان هوية موثوقة للحظر والكتم. الاتصال دون JWT لا يحصل على صلاحية مشرف.
 
-مثال باستخدام JavaScript:
+مثال اتصال:
 
-```js
-import { io } from "socket.io-client";
+    import { io } from "socket.io-client";
+    const socket = io("https://<HOST>", { auth: { token: "<HS256-JWT>" } });
 
-const socket = io("https://<HOST>");
-```
+يجب أن يحتوي JWT على sub. يمكن أيضًا أن يحتوي exp وnbf. رفض التوكن يظهر للعميل في connect_error.
 
-## طريقة الاستخدام
+## تنسيق الردود
 
-الأحداث الواردة هي أسماء الأحداث التي ترسلها الواجهة عبر `socket.emit`. الأحداث الصادرة تستقبلها عبر `socket.on`. الخادم لا يستخدم acknowledgements أو callbacks في الأحداث الحالية؛ الردود تصل كأحداث منفصلة.
+الأحداث الحالية لا تستخدم callbacks أو Socket.IO acknowledgements. تصل النتيجة كحدث منفصل. أخطاء كثيرة تستخدم الشكل:
 
-يجب إرسال `joinRoom` أولًا قبل الرسائل والهدايا وطلب المايك. أغلب الأحداث لا ترسل خطأ عند إرسال حمولة ناقصة أو تنفيذ الطلب خارج غرفة؛ قد يتم تجاهل الطلب أو قد يظهر خطأ بالخادم.
+    { "code": "ERROR_CODE", "message": "Readable explanation" }
 
-## الأحداث الواردة إلى الخادم
+## أحداث الغرفة والمايك
 
-| الحدث | الحمولة | المعنى |
+| الحدث المرسل من العميل | الإدخال | النجاح وأحداث الخادم | الخطأ |
+| --- | --- | --- | --- |
+| joinRoom | { roomId: string, user: { userId: string, name?: string, avatar?: string, ... } } | يبث الخادم userList وmicUpdate، ويرسل للمنضم roleUpdated وmessageLockUpdated. | joinRoomRejected { code, message } |
+| leaveRoom | بلا حمولة | يبث userList وmicUpdate عند تغير المقاعد. تنتهي رتبة المشرف المؤقت بعد مغادرة آخر اتصال له. | لا يوجد رد خطأ معرف حاليًا. |
+| requestMic | { spotNumber: integer } من 0 إلى 7 | للطالب takeMic { spotNumber }، وللغرفة micUpdate. | micRequestRejected { code, message } أو micRejected عند انشغال المقعد. |
+| leaveMic | { spotNumber: integer } من 0 إلى 7 | للطالب leaveMic { spotNumber }، وللغرفة micUpdate. | micLeaveRejected { code, message } |
+| audioData | أي حمولة يقبلها Socket.IO | أعضاء الغرفة الآخرون يستقبلون audioData { userId, audio }. | audioDataRejected { code, message } |
+| sendMessage | أي قيمة غير null؛ يفضل كائن رسالة متفق عليه | أعضاء الغرفة يستقبلون newMessage { message, user }. | messageRejected { code, message } |
+| sendGift | أي حمولة هدية يتفق عليها التطبيق | أعضاء الغرفة يستقبلون sendGift { gift, user }. | giftRejected { code, message } |
+
+مثال:
+
+    socket.emit("joinRoom", {
+      roomId: "room-123",
+      user: { userId: "user-42", name: "Sara", avatar: "https://example.com/sara.png" }
+    });
+    socket.emit("requestMic", { spotNumber: 2 });
+    socket.emit("sendMessage", { id: "msg-1", text: "Hello" });
+    socket.emit("sendGift", { id: "gift-1", name: "Rose" });
+
+userList مصفوفة مستخدمين، يضيف الخادم لكل منهم socketId. استخدم userId كمعرف ثابت للتطبيق؛ socketId خاص باتصال واحد. micUpdate كائن مفاتيحه أرقام المقاعد وقيمه كائنات المستخدمين. الخادم لا يفرض مخططًا ثابتًا لكائن الرسالة أو الهدية.
+
+## أحداث الإشراف
+
+يجب أن يكون منفذ الأمر عضوًا في roomId وأن يحمل JWT صالحًا. يستقبل المنفذ moderationResult بهذا الشكل:
+
+    {
+      "action": "banUser",
+      "success": true,
+      "code": "OK",
+      "message": "Action completed.",
+      "roomId": "room-123",
+      "targetUserId": "user-42"
+    }
+
+عند الفشل تكون success=false ويشرح code وmessage السبب. يتضمن الرد role عند الترقية. لا يستطيع العميل منح رتبة لنفسه عبر كائن user؛ الخادم يحدد الدور من حالة الإشراف وهوية JWT.
+
+| الحدث المرسل | الإدخال | أحداث النجاح |
 | --- | --- | --- |
-| `joinRoom` | `{ roomId: string, user: object }` | انضمام إلى غرفة وتسجيل بيانات المستخدم. يضيف الخادم `socketId` إلى كائن المستخدم. |
-| `requestMic` | `{ spotNumber: number }` | طلب مقعد مايك. المقعد المشغول ينتج `micRejected`. |
-| `leaveMic` | `{ spotNumber: number }` | طلب تحرير مقعد مايك. |
-| `audioData` | أي قيمة قابلة للإرسال عبر Socket.IO | إرسال بيانات صوتية؛ حاليًا يرسل الخادمها لكل الاتصالات الأخرى. |
-| `sendMessage` | أي قيمة قابلة للإرسال عبر Socket.IO | نشر رسالة في الغرفة. |
-| `sendGift` | أي قيمة قابلة للإرسال عبر Socket.IO | نشر هدية في الغرفة. |
-| `removeUser` | `{ roomId: string, targetUserId: string }` | محاولة إزالة مستخدم من الغرفة؛ التنفيذ الحالي فيه خلل موضح أدناه. |
+| banUser | { roomId, targetUserId, reason? } | المنفذ يستقبل moderationResult؛ المستهدف يستقبل kicked { roomId, userId, reason }؛ الغرفة تستقبل userBanned { roomId, userId } وuserList وmicUpdate. محاولة الدخول اللاحقة ترفض عبر joinRoomRejected. |
+| unbanUser | { roomId, targetUserId } | moderationResult؛ الغرفة تستقبل userUnbanned { roomId, userId }. |
+| removeUser | { roomId, targetUserId, reason? } | طرد دون تسجيل حظر؛ moderationResult وkicked وuserRemoved { roomId, userId } وuserList وmicUpdate. |
+| promoteTemporaryModerator | { roomId, targetUserId } | moderationResult مع role="temporary"؛ للمستخدم roleUpdated وللغرفة moderatorUpdated. يجب أن يكون الهدف حاضرًا. |
+| promoteFixedModerator | { roomId, targetUserId } | مثل الترقية المؤقتة مع role="fixed". مشرف الجذر فقط يستطيع منحها. تبقى بعد مغادرة الغرفة حتى تتوقف عملية الخادم. |
+| muteMic | { roomId, targetUserId } | moderationResult؛ للهدف micMuted { roomId, userId }؛ للغرفة micModerationUpdated { roomId, userId, muted: true } وmicUpdate. |
+| unmuteMic | { roomId, targetUserId } | moderationResult؛ للهدف micUnmuted { roomId, userId }؛ للغرفة micModerationUpdated { roomId, userId, muted: false }. |
+| lockMessages | { roomId } | moderationResult؛ للغرفة messageLockUpdated { roomId, locked: true, changedBy, normalUsersOnly: true }. المستخدم العادي فقط يُمنع من الكتابة، ويستطيع المشرف الكتابة. |
+| unlockMessages | { roomId } | moderationResult؛ للغرفة messageLockUpdated { roomId, locked: false, changedBy, normalUsersOnly: false }. |
 
-### مثال الانضمام وإرسال رسالة
+حقول moderationResult الأساسية: action وsuccess وcode وmessage وroomId. قد يغيب targetUserId عند قفل الرسائل.
+تُرسل أحداث الهدف إذا كان متصلًا. عند دخول مستخدم مكتوم للغرفة، يستقبل micMuted مرة أخرى حتى يحدّث الواجهة حالته.
 
-```js
-socket.emit("joinRoom", {
-  roomId: "room-123",
-  user: {
-    userId: "user-42",
-    name: "اسم المستخدم",
-    avatar: "https://example.com/avatar.png"
-  }
-});
+أمثلة أوامر واستقبال الرد:
 
-socket.emit("sendMessage", {
-  text: "مرحبًا",
-  clientMessageId: "msg-001"
-});
-```
+    socket.emit("banUser", { roomId: "room-123", targetUserId: "user-42", reason: "Spam" });
+    socket.emit("promoteTemporaryModerator", { roomId: "room-123", targetUserId: "user-43" });
+    socket.emit("promoteFixedModerator", { roomId: "room-123", targetUserId: "user-44" });
+    socket.emit("muteMic", { roomId: "room-123", targetUserId: "user-42" });
+    socket.emit("unmuteMic", { roomId: "room-123", targetUserId: "user-42" });
+    socket.emit("lockMessages", { roomId: "room-123" });
+    socket.emit("unlockMessages", { roomId: "room-123" });
 
-شكل `user` و`message` و`gift` غير محدد بمخطط ثابت في الخادم؛ يمرر الخادم القيم كما استلمها. على الواجهة الاتفاق على حقول هذه الكائنات مع تطبيق المنتج.
+    socket.on("moderationResult", (result) => {
+      if (!result.success) showError(result.message);
+    });
+    socket.on("messageLockUpdated", ({ locked }) => updateChatLock(locked));
+    socket.on("roleUpdated", ({ role }) => updateMyRole(role));
+    socket.on("micMuted", () => stopPublishingAudio());
+    socket.on("kicked", () => leaveRoomView());
 
-## الأحداث الصادرة من الخادم
+## الرتب والصلاحيات
 
-| الحدث | المستلم | الحمولة |
-| --- | --- | --- |
-| `userList` | جميع أعضاء الغرفة | مصفوفة المستخدمين المسجلين. كل مستخدم يحتوي على الأقل ما أرسله العميل، مع إضافة `socketId`. |
-| `micUpdate` | جميع أعضاء الغرفة | كائن مفاتيحه أرقام المقاعد وقيمه كائنات المستخدمين، مثل `{ "1": { "userId": "user-42", "name": "اسم المستخدم" } }`. قد تكون القيمة `{}` عند عدم وجود مقاعد مشغولة. |
-| `takeMic` | صاحب طلب المايك | `{ spotNumber: number }`. إشارة للواجهة لبدء الإرسال الصوتي. |
-| `micRejected` | صاحب الطلب المرفوض | `{ spotNumber: number, reason: string }`. النص الحالي عند انشغال المقعد: `تم أخذ المكان بالفعل`. |
-| `leaveMic` | صاحب طلب المغادرة | `{ spotNumber: number }`. يرسلها الخادم كتأكيد طلب، حتى قبل التأكد من ملكية المقعد. |
-| `audioData` | كل اتصال آخر بالخادم | `{ userId: socket.id, audio: <الحمولة المرسلة> }`. `userId` هنا هو socket id وليس `user.userId`. |
-| `newMessage` | أعضاء الغرفة | `{ message: <الحمولة المرسلة>, user: <المستخدم المسجل على socket> }`. |
-| `sendGift` | أعضاء الغرفة | `{ gift: <الحمولة المرسلة>, user: <المستخدم المسجل على socket> }`. |
-| `kicked` | المستهدف (بحسب المقصود) | لا توجد حمولة. الحدث غير موثوق حاليًا بسبب الخلل في `removeUser`. |
-| `userRemoved` | أعضاء الغرفة (بحسب المقصود) | `{ userId: targetUserId }`. الحدث غير موثوق حاليًا بسبب الخلل في `removeUser`. |
+- root: معرفه ضمن SOCKET_ROOT_MODERATOR_IDS ولديه JWT صالح مطابق لـ sub. يستطيع تنفيذ الإشراف وترقية مشرف ثابت.
+- fixed: مشرف ثابت؛ يستطيع الإشراف وترقية مشرف مؤقت.
+- temporary: يستطيع الحظر والطرد وكتم وفتح المايك وقفل وفتح الرسائل؛ لا يستطيع ترقية مشرفين.
+- normal: مستخدم عادي.
 
-عند الانضمام، يرسل الخادم `userList` للغرفة. يرسل `micUpdate` حين تكون حالة المايكات موجودة. لا يوجد حدث حاليًا مثل `userJoined` أو `userLeft`.
+لا يمكن إدارة مشرف الجذر. المشرف الثابت محمي من المشرفين الثابتين والمؤقتين، ويستطيع الجذر إدارة الأدوار الأخرى. لا يمكن تغيير المشرف الثابت إلى مؤقت. reason اختياري ويقصه الخادم إلى 300 حرف عند التخزين.
 
-## أمثلة الاستماع
+## التخزين والسلوك الحالي
 
-```js
-socket.on("userList", (users) => renderUsers(users));
-socket.on("micUpdate", (spots) => renderMicSpots(spots));
-socket.on("takeMic", ({ spotNumber }) => startPublishingAudio(spotNumber));
-socket.on("micRejected", ({ spotNumber, reason }) => showError(reason));
-socket.on("newMessage", ({ message, user }) => appendMessage(user, message));
-socket.on("sendGift", ({ gift, user }) => showGift(user, gift));
-socket.on("audioData", ({ userId, audio }) => playAudio(userId, audio));
-socket.on("kicked", () => leaveRoomView());
-```
+الحظر والرتب وكتم المايك وقفل الرسائل محفوظة حاليًا في ذاكرة عملية Node.js. تبقى الرتبة الثابتة بعد مغادرة الغرفة، وتظل الحالات موجودة ما دامت العملية تعمل؛ لكنها تضيع عند إعادة تشغيل الخادم. socket/moderation/moderation.state.js هو حد التخزين الذي يمكن استبداله لاحقًا بتكامل Laravel. سيبقى عقد أحداث الواجهة كما هو، لكن الحفظ بين مرات التشغيل يتطلب تنفيذ هذا التكامل.
 
-## تفاصيل وقيود مهمة
+الخادم يتحقق من توقيع JWT للمشرف. يوصى بإرسال JWT لكل المستخدمين. يسمح الخادم حاليًا بدخول جلسات بلا JWT كمستخدم عادي، لذلك لا تعتمد على الحظر لهوية غير موثقة؛ ولا يمكن لهذه الجلسات الحصول على صلاحيات مشرف.
 
-- `requestMic` يرفض المقعد فقط إذا كان رقمه أكبر من 7 أو كان المقعد مشغولًا. لا يتحقق حاليًا من أن الرقم صحيح موجب، ولا يفرض نطاقًا ثابتًا متسقًا. مقعد 7 مقبول، لكن تنظيف الانقطاع يمر على المقاعد 0 إلى 6 فقط.
-- يمكن للمستخدم طلب أكثر من مقعد؛ لا يوجد فحص يمنع ذلك.
-- `leaveMic` لا يحرر المقعد إلا إذا تطابق `userId` للمستخدم المخزن، لكن الخادم يرسل `leaveMic` للعميل قبل هذا الفحص.
-- بث `audioData` يستخدم `socket.broadcast` على مستوى الخادم، وليس `socket.to(roomId)`؛ لذلك يستلمه مستخدمون خارج الغرفة أيضًا. لا يوجد تحقق من امتلاك المايك.
-- `removeUser` غير صالح للاعتماد عليه حاليًا: حالة الأعضاء مخزنة كـ `Set`، لكن الخدمة تستخدمها كأنها `Map` وتستدعي `.get`. كما لا يوجد فحص صلاحية المدير. لا تعتمدوا عليه حتى إصلاحه.
-- `sendGift` مجرد بث بيانات إلى الغرفة؛ لا يتحقق الخادم من الرصيد أو الدفع أو صلاحية الهدية.
-- لا توجد مصادقة، صلاحيات، مخططات تحقق، أو رسائل أخطاء عامة متفق عليها.
-- حالة الغرف والمايكات محفوظة بذاكرة عملية Node.js وتضيع عند إعادة التشغيل، وليست مشتركة بين عدة عمليات.
-- انقطاع الاتصال يزيل المستخدم المطابق ويرسل `userList` و`micUpdate`، لكن حذف الغرفة عند فراغها غير مفعل.
+## رموز الأخطاء
 
-## توافق شكل البيانات المقترح للواجهة
+- AUTHENTICATION_FAILED: رفض JWT أثناء الاتصال.
+- FORBIDDEN: لا يملك المنفذ رتبة كافية.
+- NOT_IN_ROOM: يجب الانضمام للغرفة أولًا.
+- INVALID_MIC_SPOT: يجب أن يكون رقم المايك عددًا صحيحًا بين 0 و7.
+- MIC_MUTED: كتم المشرف يمنع طلب المايك وإرسال audioData.
+- MESSAGES_LOCKED: الدردشة مقفلة للمستخدم العادي.
+- TARGET_NOT_IN_ROOM: الترقية المؤقتة تتطلب وجود الهدف.
+- TARGET_NOT_AUTHENTICATED: الترقية المؤقتة تتطلب جلسة JWT موثقة للهدف.
+- USER_NOT_BANNED: لا يوجد حظر لإلغائه.
 
-الخادم لا يفرض هذه المخططات بعد؛ هي اقتراح تنسيقي للفريق. حافظوا على `userId` ثابت وفريد من جهة التطبيق، ولا تعتمدوا على `socketId` كمعرّف دائم.
+## أحداث يفضّل للواجهة الاستماع لها
 
-```ts
-type User = {
-  userId: string;
-  name?: string;
-  avatar?: string;
-  // حقول عرض إضافية حسب التطبيق
-};
-
-type ChatMessage = {
-  id?: string;
-  text: string;
-  createdAt?: string;
-};
-
-type Gift = {
-  id: string;
-  name?: string;
-  // لا يعني هذا أن الخادم تحقق من الدفع أو الرصيد
-};
-```
-
-## مصدر العقد
-
-راجع التنفيذ في `socket/rooms/room.events.js`, `socket/rooms/room.service.js`, `socket/users/user.events.js`, `socket/users/user.service.js`, `socket/chat/`, و`socket/gifts/`. حدّث هذه الوثيقة عند تغيير أسماء الأحداث أو الحمولات.
+    socket.on("userList", (users) => renderUsers(users));
+    socket.on("micUpdate", (spots) => renderMicSpots(spots));
+    socket.on("newMessage", ({ message, user }) => appendMessage(user, message));
+    socket.on("sendGift", ({ gift, user }) => showGift(user, gift));
+    socket.on("audioData", ({ userId, audio }) => playAudio(userId, audio));
+    socket.on("moderatorUpdated", ({ userId, role }) => updateRoomMemberRole(userId, role));
+    socket.on("micModerationUpdated", ({ userId, muted }) => updateMemberMute(userId, muted));
+    socket.on("userBanned", ({ userId }) => removeMember(userId));
+    socket.on("userUnbanned", ({ userId }) => refreshBanState(userId));
+    socket.on("userRemoved", ({ userId }) => removeMember(userId));
+    socket.on("connect_error", (error) => showConnectionError(error.message));

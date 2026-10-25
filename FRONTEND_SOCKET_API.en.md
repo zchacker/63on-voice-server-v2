@@ -1,128 +1,138 @@
-# Socket.IO API for the Frontend
+# Socket.IO API for Frontend Developers
 
-This document describes the server's current behavior. Use it as an integration reference, and read the limitations section before relying on user-removal or audio events.
+This guide describes the current Socket.IO behavior and the input/output fields. Event and field names are case-sensitive.
 
-## Connection
+## Connection and authentication
 
-- Protocol: Socket.IO (built on Engine.IO; this is not a raw WebSocket connection).
-- URL: `http://<HOST>:<PORT>` or `https://<HOST>:<PORT>`, depending on the deployment setup.
-- Default port: `3000`; it can be changed with `PORT`.
-- No authentication or handshake data is currently required.
-- The current CORS configuration allows all origins.
+- Endpoint: http://<HOST>:<PORT> or https://<HOST>:<PORT>; default port is 3000.
+- Send a JWT in the handshake as auth.token. Do not put it in the URL.
+- Regular connections without a token are currently allowed. Moderation privileges require an HS256-signed JWT with the user's ID in sub.
+- Server configuration: SOCKET_JWT_SECRET is the signing secret; SOCKET_ROOT_MODERATOR_IDS is a comma-separated list of root moderator IDs.
+- When a valid JWT is present, the server uses sub as the user's identity and replaces user.userId from joinRoom.
+- Send JWTs for every user to make identity-based bans and mutes reliable. A connection without a JWT does not get moderator privileges.
 
-JavaScript example:
+Connection example:
 
-```js
-import { io } from "socket.io-client";
+    import { io } from "socket.io-client";
+    const socket = io("https://<HOST>", { auth: { token: "<HS256-JWT>" } });
 
-const socket = io("https://<HOST>");
-```
+The JWT must contain sub. It may also contain exp and nbf. A rejected token produces the client's connect_error event.
 
-## Usage
+## Response format
 
-Incoming events are event names sent by the frontend with `socket.emit`. Outgoing events are received with `socket.on`. The current server does not use acknowledgements or callbacks; responses arrive as separate events.
+Current events do not use callbacks or Socket.IO acknowledgements. Results arrive as separate events. Many errors use this shape:
 
-Send `joinRoom` before sending messages, gifts, or microphone requests. Most events do not return an error for a missing payload or a request made outside a room; the request may be ignored or may cause a server error.
+    { "code": "ERROR_CODE", "message": "Readable explanation" }
 
-## Events sent to the server
+## Room and microphone events
 
-| Event | Payload | Meaning |
+| Client emits | Input | Success and server events | Error |
+| --- | --- | --- | --- |
+| joinRoom | { roomId: string, user: { userId: string, name?: string, avatar?: string, ... } } | Server broadcasts userList and micUpdate; joining client receives roleUpdated and messageLockUpdated. | joinRoomRejected { code, message } |
+| leaveRoom | No payload | Broadcasts userList and micUpdate when microphone spots change. A temporary moderator role ends after their last connection leaves. | No defined error response currently. |
+| requestMic | { spotNumber: integer } from 0 to 7 | Requester receives takeMic { spotNumber }; room receives micUpdate. | micRequestRejected { code, message } or micRejected if occupied. |
+| leaveMic | { spotNumber: integer } from 0 to 7 | Requester receives leaveMic { spotNumber }; room receives micUpdate. | micLeaveRejected { code, message } |
+| audioData | Any Socket.IO-serializable payload | Other room members receive audioData { userId, audio }. | audioDataRejected { code, message } |
+| sendMessage | Any non-null value; preferably an agreed message object | Room members receive newMessage { message, user }. | messageRejected { code, message } |
+| sendGift | Any gift payload agreed by the application | Room members receive sendGift { gift, user }. | giftRejected { code, message } |
+
+Example:
+
+    socket.emit("joinRoom", {
+      roomId: "room-123",
+      user: { userId: "user-42", name: "Sara", avatar: "https://example.com/sara.png" }
+    });
+    socket.emit("requestMic", { spotNumber: 2 });
+    socket.emit("sendMessage", { id: "msg-1", text: "Hello" });
+    socket.emit("sendGift", { id: "gift-1", name: "Rose" });
+
+userList is an array of users, with socketId added by the server. Use the stable application userId; socketId belongs to one connection. micUpdate is an object keyed by spot number, with user objects as values. The server does not enforce a fixed schema for message or gift objects.
+
+## Moderation events
+
+The actor must be in roomId and have a valid JWT. The actor receives moderationResult:
+
+    {
+      "action": "banUser",
+      "success": true,
+      "code": "OK",
+      "message": "Action completed.",
+      "roomId": "room-123",
+      "targetUserId": "user-42"
+    }
+
+On failure, success is false, and code and message explain why. Promotion results include role. Clients cannot assign themselves roles through the user object; the server resolves roles from moderation state and the JWT identity.
+
+| Client emits | Input | Success events |
 | --- | --- | --- |
-| `joinRoom` | `{ roomId: string, user: object }` | Join a room and register user data. The server adds `socketId` to the user object. |
-| `requestMic` | `{ spotNumber: number }` | Request a microphone spot. If it is occupied, the server emits `micRejected`. |
-| `leaveMic` | `{ spotNumber: number }` | Request release of a microphone spot. |
-| `audioData` | Any value serializable by Socket.IO | Send audio data; currently the server broadcasts it to every other connection. |
-| `sendMessage` | Any value serializable by Socket.IO | Publish a message to the room. |
-| `sendGift` | Any value serializable by Socket.IO | Publish a gift to the room. |
-| `removeUser` | `{ roomId: string, targetUserId: string }` | Attempt to remove a user from the room; the current implementation has a bug described below. |
+| banUser | { roomId, targetUserId, reason? } | Actor receives moderationResult; target receives kicked { roomId, userId, reason }; room receives userBanned { roomId, userId }, userList, and micUpdate. A later join attempt is rejected with joinRoomRejected. |
+| unbanUser | { roomId, targetUserId } | moderationResult; room receives userUnbanned { roomId, userId }. |
+| removeUser | { roomId, targetUserId, reason? } | Kicks without recording a ban; moderationResult, kicked, userRemoved { roomId, userId }, userList, and micUpdate. |
+| promoteTemporaryModerator | { roomId, targetUserId } | moderationResult with role="temporary"; target receives roleUpdated and room receives moderatorUpdated. Target must be present. |
+| promoteFixedModerator | { roomId, targetUserId } | Same as temporary promotion with role="fixed". Only a root moderator can grant this role. It remains after room exit until the server process stops. |
+| muteMic | { roomId, targetUserId } | moderationResult; target receives micMuted { roomId, userId }; room receives micModerationUpdated { roomId, userId, muted: true } and micUpdate. |
+| unmuteMic | { roomId, targetUserId } | moderationResult; target receives micUnmuted { roomId, userId }; room receives micModerationUpdated { roomId, userId, muted: false }. |
+| lockMessages | { roomId } | moderationResult; room receives messageLockUpdated { roomId, locked: true, changedBy, normalUsersOnly: true }. Regular users are blocked, while moderators can still send. |
+| unlockMessages | { roomId } | moderationResult; room receives messageLockUpdated { roomId, locked: false, changedBy, normalUsersOnly: false }. |
 
-### Example: join a room and send a message
+Required moderationResult fields are action, success, code, message, and roomId. targetUserId may be absent for message-lock actions.
+Target-specific events are sent when the target is connected. A muted user receives micMuted again on joining so the frontend can restore its state.
 
-```js
-socket.emit("joinRoom", {
-  roomId: "room-123",
-  user: {
-    userId: "user-42",
-    name: "User name",
-    avatar: "https://example.com/avatar.png"
-  }
-});
+Command and response examples:
 
-socket.emit("sendMessage", {
-  text: "Hello",
-  clientMessageId: "msg-001"
-});
-```
+    socket.emit("banUser", { roomId: "room-123", targetUserId: "user-42", reason: "Spam" });
+    socket.emit("promoteTemporaryModerator", { roomId: "room-123", targetUserId: "user-43" });
+    socket.emit("promoteFixedModerator", { roomId: "room-123", targetUserId: "user-44" });
+    socket.emit("muteMic", { roomId: "room-123", targetUserId: "user-42" });
+    socket.emit("unmuteMic", { roomId: "room-123", targetUserId: "user-42" });
+    socket.emit("lockMessages", { roomId: "room-123" });
+    socket.emit("unlockMessages", { roomId: "room-123" });
 
-The server does not define a fixed schema for `user`, `message`, or `gift`; it forwards these values as received. The frontend and product team should agree on the fields for these objects.
+    socket.on("moderationResult", (result) => {
+      if (!result.success) showError(result.message);
+    });
+    socket.on("messageLockUpdated", ({ locked }) => updateChatLock(locked));
+    socket.on("roleUpdated", ({ role }) => updateMyRole(role));
+    socket.on("micMuted", () => stopPublishingAudio());
+    socket.on("kicked", () => leaveRoomView());
 
-## Events sent by the server
+## Roles and permissions
 
-| Event | Recipient | Payload |
-| --- | --- | --- |
-| `userList` | All room members | Array of registered users. Each user contains at least the fields sent by the client, plus `socketId`. |
-| `micUpdate` | All room members | Object keyed by spot number, with user objects as values. For example: `{ "1": { "userId": "user-42", "name": "User name" } }`. It may be `{}` when no spots are occupied. |
-| `takeMic` | The user who requested the spot | `{ spotNumber: number }`. Tells the frontend to begin publishing audio. |
-| `micRejected` | The user whose request was rejected | `{ spotNumber: number, reason: string }`. Current reason for an occupied spot: `تم أخذ المكان بالفعل` ("The spot has already been taken"). |
-| `leaveMic` | The user who requested to leave | `{ spotNumber: number }`. The server sends this as a request acknowledgement, before checking whether the user owns the spot. |
-| `audioData` | Every other connection to the server | `{ userId: socket.id, audio: <sent payload> }`. Here, `userId` is the socket ID, not `user.userId`. |
-| `newMessage` | Room members | `{ message: <sent payload>, user: <user registered on the socket> }`. |
-| `sendGift` | Room members | `{ gift: <sent payload>, user: <user registered on the socket> }`. |
-| `kicked` | The target user (intended) | No payload. This event is currently unreliable because of the `removeUser` bug. |
-| `userRemoved` | Room members (intended) | `{ userId: targetUserId }`. This event is currently unreliable because of the `removeUser` bug. |
+- root: ID appears in SOCKET_ROOT_MODERATOR_IDS and has a valid JWT with a matching sub. Can moderate and promote fixed moderators.
+- fixed: fixed room moderator; can moderate and promote temporary moderators.
+- temporary: can ban/kick users, mute/unmute microphones, and lock/unlock messages. Cannot promote moderators.
+- normal: regular user.
 
-When a user joins, the server sends `userList` to the room. It sends `micUpdate` if microphone state exists. There are currently no `userJoined` or `userLeft` events.
+Moderators cannot manage root moderators. Fixed moderators are protected from fixed and temporary moderators; root can manage other roles. A fixed moderator cannot be changed to temporary. Optional reason is truncated to 300 characters when stored.
 
-## Listening examples
+## Storage and current behavior
 
-```js
-socket.on("userList", (users) => renderUsers(users));
-socket.on("micUpdate", (spots) => renderMicSpots(spots));
-socket.on("takeMic", ({ spotNumber }) => startPublishingAudio(spotNumber));
-socket.on("micRejected", ({ spotNumber, reason }) => showError(reason));
-socket.on("newMessage", ({ message, user }) => appendMessage(user, message));
-socket.on("sendGift", ({ gift, user }) => showGift(user, gift));
-socket.on("audioData", ({ userId, audio }) => playAudio(userId, audio));
-socket.on("kicked", () => leaveRoomView());
-```
+Bans, roles, microphone mutes, and message locks currently live in Node.js process memory. A fixed role survives leaving the room, and these states remain while the process runs, but they are lost on server restart. socket/moderation/moderation.state.js is the boundary for a future Laravel storage integration. The frontend event contract can remain unchanged, but persistence across restarts requires that integration.
 
-## Important details and limitations
+The server verifies the moderator's JWT signature. Send JWTs for all users. The server currently allows sessions without JWT to join as regular users, so do not rely on bans for an unverified identity; those users cannot receive moderator privileges.
 
-- `requestMic` rejects a spot only when its number is greater than 7 or the spot is occupied. It does not currently check that the number is a positive integer or enforce a consistent range. Spot 7 is accepted, but disconnect cleanup only checks spots 0 through 6.
-- A user can request more than one spot; there is no check preventing this.
-- `leaveMic` only releases the spot if the stored user's `userId` matches, but the server emits `leaveMic` to the client before that check.
-- `audioData` uses `socket.broadcast` at the server level, not `socket.to(roomId)`, so users outside the room also receive it. The server does not verify microphone ownership.
-- `removeUser` should not currently be relied on: members are stored in a `Set`, but the service treats the collection as a `Map` and calls `.get`. There is also no admin authorization check. Do not use this event until it is fixed.
-- `sendGift` only broadcasts the supplied data to the room; the server does not verify balance, payment, or gift eligibility.
-- There is no authentication, authorization, payload schema validation, or agreed general error format.
-- Room and microphone state is stored in the Node.js process memory. It is lost on restart and is not shared across multiple processes.
-- On disconnect, the matching user is removed and `userList` and `micUpdate` are sent, but deleting an empty room is not enabled.
+## Common error codes
 
-## Suggested frontend data shapes
+- AUTHENTICATION_FAILED: JWT rejected during connection.
+- FORBIDDEN: actor lacks the required role.
+- NOT_IN_ROOM: join the room before sending the request.
+- INVALID_MIC_SPOT: spot number must be an integer from 0 to 7.
+- MIC_MUTED: moderator mute blocks mic requests and audioData.
+- MESSAGES_LOCKED: chat is locked for regular users.
+- TARGET_NOT_IN_ROOM: temporary promotion requires the target to be present.
+- TARGET_NOT_AUTHENTICATED: temporary promotion requires the target to have a valid JWT session.
+- USER_NOT_BANNED: there is no ban to remove.
 
-The server does not enforce these schemas yet; they are a suggested team convention. Keep `userId` stable and unique at the application level, and do not rely on `socketId` as a permanent identifier.
+## Suggested event listeners
 
-```ts
-type User = {
-  userId: string;
-  name?: string;
-  avatar?: string;
-  // Additional display fields as needed by the application
-};
-
-type ChatMessage = {
-  id?: string;
-  text: string;
-  createdAt?: string;
-};
-
-type Gift = {
-  id: string;
-  name?: string;
-  // This does not mean the server verified payment or balance
-};
-```
-
-## Contract source
-
-See the implementation in `socket/rooms/room.events.js`, `socket/rooms/room.service.js`, `socket/users/user.events.js`, `socket/users/user.service.js`, `socket/chat/`, and `socket/gifts/`. Update this document whenever event names or payloads change.
+    socket.on("userList", (users) => renderUsers(users));
+    socket.on("micUpdate", (spots) => renderMicSpots(spots));
+    socket.on("newMessage", ({ message, user }) => appendMessage(user, message));
+    socket.on("sendGift", ({ gift, user }) => showGift(user, gift));
+    socket.on("audioData", ({ userId, audio }) => playAudio(userId, audio));
+    socket.on("moderatorUpdated", ({ userId, role }) => updateRoomMemberRole(userId, role));
+    socket.on("micModerationUpdated", ({ userId, muted }) => updateMemberMute(userId, muted));
+    socket.on("userBanned", ({ userId }) => removeMember(userId));
+    socket.on("userUnbanned", ({ userId }) => refreshBanState(userId));
+    socket.on("userRemoved", ({ userId }) => removeMember(userId));
+    socket.on("connect_error", (error) => showConnectionError(error.message));
