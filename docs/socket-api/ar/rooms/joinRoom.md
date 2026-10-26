@@ -15,7 +15,8 @@
 1. يأخذ Node معرف المستخدم من claim sub في JWT الموثق.
 2. يستدعي Node Laravel عبر POST /api/internal/socket/v1/rooms/{roomId}/authorize-join ويرسل userId وconnectionId الحالي.
 3. يتحقق Laravel من الغرفة وحق المستخدم في الانضمام والحظر والدور الثابت وكتم المايك وقفل الرسائل.
-4. يدخل Node المستخدم إلى غرفة Socket.IO فقط إذا أعاد Laravel allowed=true ومعرف مستخدم مطابقًا للتوكن.
+4. يحتوي كائن الغرفة الموثوق على `liveKitRoomName` المساوي لـ`rooms.username` في Laravel؛ يحتفظ به Socket داخليًا لاستخدامه عند إدارة المشاركين في LiveKit.
+5. يدخل Node المستخدم إلى غرفة Socket.IO فقط إذا أعاد Laravel allowed=true ومعرف مستخدم مطابقًا للتوكن.
 
 ## المخرجات عند النجاح
 

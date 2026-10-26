@@ -221,6 +221,70 @@ async function saveModerationCommand(roomId, command) {
     return response;
 }
 
+async function postModerationAudit(event) {
+    const path = '/moderation/audit-events';
+    let response;
+    // كلا المرحلتين تعيدان استخدام UUID والحقول نفسها عند إعادة المحاولة.
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            response = await postInternal(path, event);
+            break;
+        } catch (error) {
+            const configurationError = error.code?.startsWith('SOCKET_CONFIGURATION');
+            const retryable = !configurationError
+                && (['LARAVEL_TIMEOUT', 'LARAVEL_UNAVAILABLE'].includes(error.code) || error.status >= 500);
+            if (!retryable || attempt === 2) throw error;
+        }
+    }
+
+    const acceptedStatuses = event.phase === 'started' ? ['started', 'completed'] : ['completed'];
+    if (response.requestId !== event.requestId || !acceptedStatuses.includes(response.status)) {
+        throw new LaravelServiceError(
+            'INVALID_LARAVEL_RESPONSE',
+            'Laravel returned an invalid moderation audit response.',
+            502
+        );
+    }
+    if (response.status === 'completed'
+        && (!response.result || typeof response.result !== 'object'
+            || Array.isArray(response.result)
+            || response.result.requestId !== event.requestId
+            || typeof response.result.success !== 'boolean'
+            || response.result.action !== event.action)) {
+        throw new LaravelServiceError(
+            'INVALID_LARAVEL_RESPONSE',
+            'Laravel returned an invalid completed moderation audit result.',
+            502
+        );
+    }
+    return response;
+}
+
+function startModerationAudit(event) {
+    return postModerationAudit({ ...event, phase: 'started' });
+}
+
+function completeModerationAudit(event, result) {
+    return postModerationAudit({
+        ...event,
+        phase: 'completed',
+        outcome: result.success ? 'success' : result.outcome,
+        code: result.code,
+        result: {
+            action: result.action,
+            success: result.success,
+            code: result.code,
+            message: result.message,
+            roomId: result.roomId,
+            targetUserId: result.targetUserId,
+            role: result.role,
+            state: result.state,
+            requestId: result.requestId,
+            occurredAt: result.occurredAt
+        }
+    });
+}
+
 function getPublicError(error) {
     if (error instanceof LaravelServiceError) {
         return { code: error.code, message: error.message };
@@ -234,6 +298,8 @@ function getPublicError(error) {
 module.exports = {
     authorizeRoomJoin,
     saveModerationCommand,
+    startModerationAudit,
+    completeModerationAudit,
     getPublicError,
     LaravelServiceError
 };

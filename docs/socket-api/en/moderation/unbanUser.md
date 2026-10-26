@@ -15,7 +15,7 @@ Both fields must be non-empty strings. The actor must be joined to this room and
 
 ## Failure
 
-Laravel decides whether an active ban exists. Node removes its local mirror and emits userUnbanned only after Laravel returns success. Backend errors, including USER_NOT_BANNED, are returned in moderationResult.
+Laravel decides whether an active ban exists. Node keeps no local ban list and emits the existing userUnbanned { roomId, userId } event only after Laravel returns success. Backend errors, including USER_NOT_BANNED, are returned in moderationResult.
 
 Unbanning does not automatically rejoin a previously kicked socket. The user must emit joinRoom again.
 

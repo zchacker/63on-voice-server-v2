@@ -15,7 +15,8 @@ The optional legacy user object is accepted but ignored. The server never trusts
 1. Node takes the user ID from the verified JWT sub claim.
 2. Node calls Laravel POST /api/internal/socket/v1/rooms/{roomId}/authorize-join with userId and the current Socket.IO connectionId.
 3. Laravel checks the room, the user's membership/access, bans, persistent role, microphone mute, and message-lock state.
-4. Node joins the Socket.IO room only when Laravel returns allowed=true and a matching user ID.
+4. The trusted room object includes `liveKitRoomName`, equal to the Laravel `rooms.username`; Socket keeps this server-only value for LiveKit moderation.
+5. Node joins the Socket.IO room only when Laravel returns allowed=true and a matching user ID.
 
 ## Success outputs
 

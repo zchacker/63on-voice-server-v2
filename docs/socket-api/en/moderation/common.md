@@ -8,7 +8,7 @@ Targeted action:
 
     { "roomId": "room-123", "targetUserId": "user-42" }
 
-banUser and removeUser may include reason. lockMessages and unlockMessages use roomId only. demoteFixedModerator uses the same targeted shape as promoteFixedModerator.
+banUser and removeUser may include reason. lockMessages and unlockMessages use roomId only. demoteFixedModerator uses the same targeted shape as promoteFixedModerator. Any command may include an optional UUID `requestId`; reuse it when retrying the same attempt. Node generates one when omitted.
 
 ## moderationResult
 
@@ -19,6 +19,8 @@ banUser and removeUser may include reason. lockMessages and unlockMessages use r
       "message": "Action completed.",
       "roomId": "room-123",
       "targetUserId": "user-42",
+      "requestId": "9d3d2333-315b-4e85-bb2c-6f3fdd586975",
+      "occurredAt": "2026-10-26T10:30:00.000Z",
       "state": {
         "banned": true,
         "role": "normal",
@@ -43,13 +45,19 @@ Only the owner can promote or demote a fixed moderator. Owners, fixed moderators
 
 ## Persistence and failure behavior
 
-banUser, unbanUser, promoteFixedModerator, demoteFixedModerator, muteMic, unmuteMic, lockMessages, and unlockMessages are sent to Laravel before Node changes its local mirror or broadcasts success. Laravel is the durable source of truth. A failure or timeout returns moderationResult with success=false and no success broadcast.
+banUser, unbanUser, promoteFixedModerator, demoteFixedModerator, muteMic, unmuteMic, lockMessages, and unlockMessages are sent to Laravel before Node changes its local mirror or broadcasts success. Laravel is the durable source of truth for banned state; Node keeps no independent ban list. `state.banned` is taken from Laravel's command response. Existing `userBanned` and `userUnbanned` events keep `{ roomId, userId }` and are emitted only after Laravel confirms the saved action.
 
-promoteTemporaryModerator and removeUser are live Socket operations only. A temporary role is removed when the user's final active socket leaves the room. Laravel is queried on each join to restore persistent role, ban eligibility, mic mute, and message lock state.
+Laravel's current moderation command route records successful durable actions and valid authorization/business rejections. Socket uses that route when Laravel has not deployed the separate audit-events API. Locally rejected attempts are not recorded by the current Laravel API.
+
+promoteTemporaryModerator and removeUser are live Socket operations, not persistent role or ban changes. Laravel's current API has no audit route for these operations, so Socket fails them closed until a server-side audit contract is deployed. A temporary role is removed when the user's final active socket leaves the room. Laravel is queried on each join to restore persistent role, ban eligibility, mic mute, and message lock state.
+
+banUser and removeUser also remove an active participant through the LiveKit server API before the target is notified with `kicked`. The Laravel join authorization response must include the trusted `room.liveKitRoomName` (`rooms.username`); the current response does not, so the current Node validation rejects it until that field is added. Laravel's `POST /api/room/join` now rejects an active room ban with `USER_BANNED` before issuing a LiveKit token.
 
 The state response for a successful saved command contains the current fields banned, role, micMuted, and messagesLocked. Clients should use this snapshot to refresh controls.
 
 Each Node worker mirrors state in its own process. No cross-worker Socket.IO adapter is configured, so immediate live broadcasts currently reach sockets on the worker that received the command.
+
+Room metadata broadcasts use the internal Laravel-to-Node endpoint documented in [roomUpdated](../rooms/roomUpdated.md). The Socket endpoint is ready, but Laravel does not yet call it after a room update; the feature is not end-to-end until that callback is added.
 
 ## Common error codes
 

@@ -3,8 +3,11 @@ const state = require('./moderation.state');
 const validation = require('./moderation.validation');
 const roomState = require('../rooms/room.state');
 const laravel = require('../../services/laravel.service');
+const livekit = require('../../services/livekit.service');
 
-const roomActionQueues = new Map();
+const inFlightRequests = new Map();
+// Keep the result when an action finished but Laravel has not confirmed its audit completion yet.
+const pendingAuditResults = new Map();
 const PERSISTED_ACTIONS = {
     banUser: 'ban',
     unbanUser: 'unban',
@@ -16,26 +19,34 @@ const PERSISTED_ACTIONS = {
     unlockMessages: 'unlock_messages'
 };
 
-function emitResult(socket, action, payload, result) {
+function buildModerationResult(action, payload, context, result) {
     const output = {
         action,
         success: result.success,
-        code: result.code || 'OK',
+        code: result.code || (result.success ? 'OK' : 'MODERATION_ACTION_FAILED'),
         message: result.message,
-        roomId: payload?.roomId || socket.roomId || null,
+        roomId: payload?.roomId || null,
         targetUserId: payload?.targetUserId || null,
-        role: result.role
+        requestId: context.requestId,
+        occurredAt: context.occurredAt
     };
+    if (result.role !== undefined) output.role = result.role;
     if (result.state) output.state = result.state;
-    socket.emit('moderationResult', output);
+    return output;
 }
 
-function fail(socket, action, payload, result) {
+function emitResult(socket, action, payload, result, context) {
+    const output = buildModerationResult(action, payload, context, result);
+    if (context) context.result = output;
+    else socket.emit('moderationResult', output);
+}
+
+function fail(socket, action, payload, result, context) {
     emitResult(socket, action, payload, {
         success: false,
         code: result.code,
         message: result.message
-    });
+    }, context);
 }
 
 function activeSockets(io, roomId, userId) {
@@ -51,13 +62,19 @@ function publishMics(io, roomId) {
     io.to(roomId).emit('micUpdate', { ...(roomState.getMicSpots(roomId) || {}) });
 }
 
-function validateTarget(socket, action, payload) {
-    return validation.validateModeration(socket, payload, action);
+function auditOutcome(result) {
+    if (result.success) return 'success';
+    if (['FORBIDDEN', 'NOT_IN_ROOM', 'AUTHENTICATION_REQUIRED', 'SELF_TARGET',
+        'PROTECTED_TARGET', 'INVALID_ROOM_ID', 'INVALID_TARGET_USER_ID', 'TARGET_NOT_IN_ROOM',
+        'TARGET_NOT_AUTHENTICATED', 'FIXED_MODERATOR', 'INVALID_REQUEST_ID', 'UNKNOWN_ACTION'].includes(result.code)) {
+        return 'rejected';
+    }
+    return 'failed';
 }
 
-function validateAction(socket, action, payload) {
-    const result = validateTarget(socket, action, payload);
-    if (!result.valid) fail(socket, action, payload, result);
+function validateAction(socket, action, payload, context) {
+    const result = validation.validateModeration(socket, payload, action);
+    if (!result.valid) fail(socket, action, payload, result, context);
     return result;
 }
 
@@ -81,12 +98,14 @@ function cancelPendingJoins(io, roomId, targetUserId) {
 function removeTargetFromRoom(io, roomId, targetUserId, notify, reason) {
     const sockets = activeSockets(io, roomId, targetUserId);
     for (const target of sockets) {
-        target.emit(notify, { roomId, userId: targetUserId, reason: reason || null });
         target.leave(roomId);
         target.roomId = null;
         target.requestedRoomId = null;
+        target.liveKitRoomName = null;
         target.user = null;
         roomState.removeRoomUser(roomId, target.id);
+        // Notify only after the Socket membership and local user entry are cleared.
+        target.emit(notify, { roomId, userId: targetUserId, reason: reason || null });
     }
 
     state.removeTemporary(roomId, targetUserId);
@@ -101,9 +120,9 @@ async function persistAction(socket, action, payload) {
     if (!commandAction) return { valid: true, state: null };
 
     const roomId = payload.roomId;
-    const actorUserId = socket.user.userId;
+    const actorUserId = socket.authenticatedUserId;
     const command = {
-        requestId: crypto.randomUUID(),
+        requestId: payload.requestId,
         action: commandAction,
         actorUserId,
         actorRole: state.getCommandActorRole(roomId, actorUserId)
@@ -132,7 +151,7 @@ async function persistAction(socket, action, payload) {
     return result;
 }
 
-function rejectPersistence(io, socket, action, payload, result) {
+function rejectPersistence(io, socket, action, payload, result, context) {
     if (result.uncertain) {
         // انقطاع الرد لا يعني تراجع معاملة Laravel. نفرغ العضوية حتى يُعاد التحقق من الحالة الفعلية.
         const users = new Set(Array.from(io.sockets.sockets.values())
@@ -142,21 +161,10 @@ function rejectPersistence(io, socket, action, payload, result) {
             removeTargetFromRoom(io, payload.roomId, userId, 'kicked', 'Room state requires reauthorization.');
         }
     }
-    return fail(socket, action, payload, result);
+    return fail(socket, action, payload, result, context);
 }
 
-function applyPersistedState(roomId, targetUserId, persistedState, reason, actorUserId) {
-    if (targetUserId && typeof persistedState.banned === 'boolean') {
-        if (persistedState.banned) {
-            state.ban(roomId, targetUserId, {
-                reason: reason || null,
-                bannedBy: actorUserId,
-                bannedAt: new Date().toISOString()
-            });
-        } else {
-            state.unban(roomId, targetUserId);
-        }
-    }
+function applyPersistedState(roomId, targetUserId, persistedState) {
     if (targetUserId && typeof persistedState.role === 'string') {
         state.setPersistentRole(roomId, targetUserId, persistedState.role);
     }
@@ -170,32 +178,53 @@ function applyPersistedState(roomId, targetUserId, persistedState, reason, actor
     }
 }
 
-async function moderationAction(io, socket, action, payload = {}) {
-    const checked = validateAction(socket, action, payload);
+async function moderationAction(io, socket, action, payload = {}, context) {
+    const checked = validateAction(socket, action, payload, context);
     if (!checked.valid) return;
 
     const { roomId, targetUserId } = payload;
-    const moderatorId = socket.user.userId;
+    // Keep the verified room target even if the actor disconnects during Laravel's request.
+    const liveKitRoomName = socket.liveKitRoomName;
     const reason = typeof payload.reason === 'string' ? payload.reason.slice(0, 1000) : null;
     const persisted = PERSISTED_ACTIONS[action]
         ? await persistAction(socket, action, payload)
         : { valid: true, state: null };
-    if (!persisted.valid) return rejectPersistence(io, socket, action, payload, persisted);
+    if (!persisted.valid) return rejectPersistence(io, socket, action, payload, persisted, context);
     if (persisted.state) {
-        applyPersistedState(roomId, targetUserId, persisted.state, reason, moderatorId);
+        applyPersistedState(roomId, targetUserId, persisted.state);
     }
 
     let role;
     switch (action) {
         case 'banUser':
+            let livekitError;
+            try {
+                await livekit.removeActiveParticipant(liveKitRoomName, targetUserId);
+            } catch (error) {
+                livekitError = error;
+            }
             cancelPendingJoins(io, roomId, targetUserId);
             removeTargetFromRoom(io, roomId, targetUserId, 'kicked', reason);
             io.to(roomId).emit('userBanned', { roomId, userId: targetUserId });
+            if (livekitError) {
+                return fail(socket, action, payload, {
+                    code: livekitError.code || 'LIVEKIT_REMOVAL_FAILED',
+                    message: 'The ban was saved, but LiveKit could not remove the active participant.'
+                }, context);
+            }
             break;
         case 'unbanUser':
             io.to(roomId).emit('userUnbanned', { roomId, userId: targetUserId });
             break;
         case 'removeUser':
+            try {
+                await livekit.removeActiveParticipant(liveKitRoomName, targetUserId);
+            } catch (error) {
+                return fail(socket, action, payload, {
+                    code: error.code || 'LIVEKIT_REMOVAL_FAILED',
+                    message: 'LiveKit could not remove the active participant.'
+                }, context);
+            }
             removeTargetFromRoom(io, roomId, targetUserId, 'kicked', reason);
             io.to(roomId).emit('userRemoved', { roomId, userId: targetUserId });
             break;
@@ -204,20 +233,20 @@ async function moderationAction(io, socket, action, payload = {}) {
                 return fail(socket, action, payload, {
                     code: 'TARGET_NOT_IN_ROOM',
                     message: 'The target must currently be in the room for temporary promotion.'
-                });
+                }, context);
             }
             if (!activeSockets(io, roomId, targetUserId)
                 .every((target) => target.authenticatedUserId === targetUserId)) {
                 return fail(socket, action, payload, {
                     code: 'TARGET_NOT_AUTHENTICATED',
                     message: 'The target must have a valid authenticated session.'
-                });
+                }, context);
             }
             if (!state.promoteTemporary(roomId, targetUserId)) {
                 return fail(socket, action, payload, {
                     code: 'FIXED_MODERATOR',
                     message: 'A room owner or fixed moderator cannot be changed to temporary.'
-                });
+                }, context);
             }
             role = 'temporary';
             break;
@@ -254,7 +283,7 @@ async function moderationAction(io, socket, action, payload = {}) {
             return fail(socket, action, payload, {
                 code: 'UNKNOWN_ACTION',
                 message: 'Unknown moderation action.'
-            });
+            }, context);
     }
 
     if (role) {
@@ -269,25 +298,25 @@ async function moderationAction(io, socket, action, payload = {}) {
         message: 'Action completed.',
         role,
         state: persisted.state || undefined
-    });
+    }, context);
 }
 
-async function lockMessages(io, socket, payload = {}, locked) {
+async function lockMessages(io, socket, payload = {}, locked, context) {
     const action = locked ? 'lockMessages' : 'unlockMessages';
     const checked = validation.validateModerator(socket, payload.roomId);
-    if (!checked.valid) return fail(socket, action, payload, checked);
+    if (!checked.valid) return fail(socket, action, payload, checked, context);
 
     // نثبت هوية المنفذ قبل انتظار الشبكة؛ قد يغادر الاتصال بينما يحفظ Laravel الأمر.
-    const actorUserId = socket.user.userId;
+    const actorUserId = socket.authenticatedUserId;
     const persisted = await persistAction(socket, action, payload);
-    if (!persisted.valid) return rejectPersistence(io, socket, action, payload, persisted);
+    if (!persisted.valid) return rejectPersistence(io, socket, action, payload, persisted, context);
     if (persisted.state.messagesLocked !== locked) {
         return fail(socket, action, payload, {
             code: 'LARAVEL_STATE_MISMATCH',
             message: 'Laravel did not confirm the requested message lock state.'
-        });
+        }, context);
     }
-    applyPersistedState(payload.roomId, null, persisted.state, null, actorUserId);
+    applyPersistedState(payload.roomId, null, persisted.state);
 
     const eventPayload = {
         roomId: payload.roomId,
@@ -300,36 +329,218 @@ async function lockMessages(io, socket, payload = {}, locked) {
         success: true,
         message: 'Action completed.',
         state: persisted.state
-    });
+    }, context);
 }
 
-async function handleModeration(io, socket, action, payload) {
+function normalizeModerationPayload(socket, payload) {
     const normalizedPayload = payload && typeof payload === 'object' && !Array.isArray(payload)
         ? { ...payload }
         : {};
+    // actor والrole لا يأتيان من العميل؛ نعتمد هوية JWT والرتبة التي عُيّنت بعد Laravel authorization.
+    delete normalizedPayload.actorUserId;
+    delete normalizedPayload.actorRole;
     // نقبل ID المرسل أو الاسم الذي استُخدم عند الانضمام، ونطبق الإشراف على الغرفة الموحدة فقط.
     const suppliedRoomId = String(normalizedPayload.roomId ?? '');
     if (socket.roomId && [socket.roomId, socket.requestedRoomId].includes(suppliedRoomId))
         normalizedPayload.roomId = socket.roomId;
+    return normalizedPayload;
+}
+
+function isUuid(value) {
+    return typeof value === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function createModerationContext(socket, action, payload) {
+    const suppliedRequestId = payload.requestId;
+    const requestIdIsValid = suppliedRequestId === undefined || isUuid(suppliedRequestId);
+    const requestId = requestIdIsValid && typeof suppliedRequestId === 'string'
+        ? suppliedRequestId
+        : crypto.randomUUID();
+    payload.requestId = requestId;
+    const roomId = typeof payload.roomId === 'string' && payload.roomId.trim()
+        ? payload.roomId.trim()
+        : socket.roomId || null;
+    const actorUserId = typeof socket.authenticatedUserId === 'string'
+        ? socket.authenticatedUserId
+        : null;
+    const context = {
+        requestId,
+        occurredAt: new Date().toISOString(),
+        actorUserId,
+        actorRole: validation.getActorRole(socket, roomId || ''),
+        result: null
+    };
+    const auditEvent = {
+        requestId,
+        roomId,
+        action,
+        actorUserId,
+        actorRole: context.actorRole,
+        targetUserId: typeof payload.targetUserId === 'string'
+            ? payload.targetUserId.slice(0, 64)
+            : null,
+        reason: typeof payload.reason === 'string'
+            ? payload.reason.slice(0, 1000)
+            : null,
+        occurredAt: context.occurredAt
+    };
+    const fingerprint = JSON.stringify([
+        roomId, action, actorUserId, context.actorRole, auditEvent.targetUserId, auditEvent.reason
+    ]);
+    return { requestId, requestIdIsValid, context, auditEvent, fingerprint };
+}
+
+async function executeModerationAction(io, socket, action, payload, context, requestIdIsValid, roomId) {
     const execute = async () => {
         try {
+            if (!requestIdIsValid) {
+                return fail(socket, action, payload, {
+                    code: 'INVALID_REQUEST_ID',
+                    message: 'requestId must be a UUID when provided.'
+                }, context);
+            }
             if (action === 'lockMessages')
-                return await lockMessages(io, socket, normalizedPayload, true);
+                return await lockMessages(io, socket, payload, true, context);
             if (action === 'unlockMessages')
-                return await lockMessages(io, socket, normalizedPayload, false);
-            return await moderationAction(io, socket, action, normalizedPayload);
+                return await lockMessages(io, socket, payload, false, context);
+            return await moderationAction(io, socket, action, payload, context);
         } catch {
-            fail(socket, action, normalizedPayload, {
+            return fail(socket, action, payload, {
                 code: 'MODERATION_ACTION_FAILED',
                 message: 'The moderation action could not be completed.'
-            });
+            }, context);
         }
     };
 
-    const roomId = normalizedPayload.roomId;
-    if (typeof roomId === 'string' && roomId.trim())
-        return roomState.runRoomOperation(roomId, execute);
+    if (typeof roomId === 'string') return roomState.runRoomOperation(roomId, execute);
     return execute();
+}
+
+async function executeAndBuildResult(io, socket, action, payload, requestIdIsValid, context, roomId) {
+    await executeModerationAction(io, socket, action, payload, context, requestIdIsValid, roomId);
+    return context.result || buildModerationResult(action, payload, context, {
+        success: false,
+        code: 'MODERATION_ACTION_FAILED',
+        message: 'The moderation action could not be completed.'
+    });
+}
+
+async function runAuditedModeration(
+    io, socket, action, payload, requestIdIsValid, context, auditEvent, fingerprint
+) {
+    let auditStart;
+    try {
+        auditStart = await laravel.startModerationAudit(auditEvent);
+    } catch (error) {
+        // Laravel's current command endpoint already stores outcomes for the eight durable actions.
+        if (PERSISTED_ACTIONS[action] && error.code === 'LARAVEL_ENDPOINT_NOT_FOUND') {
+            const result = await executeAndBuildResult(
+                io, socket, action, payload, requestIdIsValid, context, auditEvent.roomId
+            );
+            socket.emit('moderationResult', result);
+            return result;
+        }
+
+        const output = buildModerationResult(action, payload, context, {
+            success: false,
+            ...laravel.getPublicError(error)
+        });
+        socket.emit('moderationResult', output);
+        return output;
+    }
+
+    if (auditStart.status === 'completed' && auditStart.result) {
+        socket.emit('moderationResult', auditStart.result);
+        return auditStart.result;
+    }
+    if (auditStart.status !== 'started') {
+        const output = buildModerationResult(action, payload, context, {
+            success: false,
+            code: 'INVALID_LARAVEL_RESPONSE',
+            message: 'Laravel did not confirm the moderation audit attempt.'
+        });
+        socket.emit('moderationResult', output);
+        return output;
+    }
+
+    const result = await executeAndBuildResult(
+        io, socket, action, payload, requestIdIsValid, context, auditEvent.roomId
+    );
+    try {
+        await laravel.completeModerationAudit(auditEvent, {
+            ...result,
+            outcome: auditOutcome(result)
+        });
+    } catch {
+        pendingAuditResults.set(context.requestId, {
+            fingerprint,
+            auditEvent,
+            result: { ...result }
+        });
+        result.success = false;
+        result.code = 'MODERATION_AUDIT_RESULT_PENDING';
+        result.message = 'The moderation result could not be confirmed by the audit service.';
+    }
+    socket.emit('moderationResult', result);
+    return result;
+}
+
+async function retryPendingAudit(socket, pending) {
+    try {
+        const response = await laravel.completeModerationAudit(pending.auditEvent, {
+            ...pending.result,
+            outcome: auditOutcome(pending.result)
+        });
+        const result = response.result || pending.result;
+        pendingAuditResults.delete(pending.auditEvent.requestId);
+        socket.emit('moderationResult', result);
+        return result;
+    } catch {
+        const result = {
+            ...pending.result,
+            success: false,
+            code: 'MODERATION_AUDIT_RESULT_PENDING',
+            message: 'The moderation result could not be confirmed by the audit service.'
+        };
+        socket.emit('moderationResult', result);
+        return result;
+    }
+}
+
+async function handleModeration(io, socket, action, payload) {
+    const normalizedPayload = normalizeModerationPayload(socket, payload);
+    const { requestId, requestIdIsValid, context, auditEvent, fingerprint } =
+        createModerationContext(socket, action, normalizedPayload);
+    const inFlight = inFlightRequests.get(requestId);
+    if (inFlight && inFlight.fingerprint === fingerprint) {
+        const previousResult = await inFlight.promise;
+        socket.emit('moderationResult', previousResult);
+        return previousResult;
+    }
+    const pending = pendingAuditResults.get(requestId);
+    if (pending) {
+        if (pending.fingerprint !== fingerprint) {
+            const result = buildModerationResult(action, normalizedPayload, context, {
+                success: false,
+                code: 'IDEMPOTENCY_KEY_REUSED',
+                message: 'This requestId was already used for a different moderation action.'
+            });
+            socket.emit('moderationResult', result);
+            return result;
+        }
+        return retryPendingAudit(socket, pending);
+    }
+
+    const operation = runAuditedModeration(
+        io, socket, action, normalizedPayload, requestIdIsValid, context, auditEvent, fingerprint
+    );
+    inFlightRequests.set(requestId, { fingerprint, promise: operation });
+    try {
+        return await operation;
+    } finally {
+        if (inFlightRequests.get(requestId)?.promise === operation) inFlightRequests.delete(requestId);
+    }
 }
 
 async function reconcileRoom(roomId) {
@@ -359,13 +570,12 @@ async function reconcileRoom(roomId) {
             'ROOM_STATE_UNCERTAIN', 'Room moderation state could not be reconciled.', 503
         );
     }
-    applyPersistedState(roomId, command.targetUserId, result.state, command.reason, command.actorUserId);
+    applyPersistedState(roomId, command.targetUserId, result.state);
     state.clearPendingCommand(roomId);
     return true;
 }
 
 function syncFromAuthorization(roomId, userId, authorization) {
-    state.unban(roomId, userId);
     state.setPersistentRole(roomId, userId, authorization.role);
 
     if (authorization.moderation.micMuted) state.muteUser(roomId, userId);

@@ -1,6 +1,20 @@
 # تكليف فريق Laravel: ربط Sanctum بسوكيت الصوت وحفظ الإشراف
 
-مرجع عقد التكامل: نفّذ فريق Laravel واجهات التكامل الموثقة حاليًا في API_REFERENCE.md. تم ربط خادم Node بهذه الواجهات؛ احتفظوا بهذا الملف كقائمة مطابقة للعقد، وحدّثوا API_REFERENCE.md إذا تغيّرت الحقول أو الأكواد.
+## حالة التكامل بعد تحديث Laravel في 2026-10-26
+
+نسخة الحالة الأحدث موجودة في `/Users/hiramdiazdiaz/Herd/63on-backend-v2/LARAVEL_SOCKET_INTEGRATION_REQUEST.md` ومرجع API_REFERENCE في مستودع Laravel. Laravel أضاف إصدار `socket_token`، وتفويض الانضمام، وأوامر الإشراف الثمانية مع idempotency وسجل للأوامر الناجحة ورفض الأعمال، وفحص الحظر قبل إصدار توكن LiveKit.
+
+ما يزال تكامل Socket يحتاج الآتي قبل اكتمال المسار:
+
+- يطلب تحقق انضمام Node الحقل الموثوق `room.liveKitRoomName=rooms.username`، لكن رد Laravel الحالي لا يعيده؛ لذلك يرفض Node رد التفويض الحالي. أضيفوا الحقل إلى استجابة authorize-join.
+- مسار `/api/internal/socket/v1/moderation/audit-events` غير موجود حاليًا. عند غيابه، يستخدم Node مسار أوامر Laravel لتشغيل وتدقيق الأوامر الثمانية الدائمة. المحاولات المرفوضة محليًا في Node لا يسجلها Laravel حتى الآن.
+- لا توجد آلية Laravel لتسجيل `removeUser` و`promoteTemporaryModerator`. يبقيهما Node مرفوضين إذا لم تتوفر واجهة تدقيق خادمية.
+- نقطة Node الداخلية لتحديث الغرفة موجودة، لكن Laravel لا يستدعيها بعد نجاح `PATCH /api/rooms/{roomId}`؛ لذلك حدث `roomUpdated` غير فعال من الطرفين بعد. عند إضافة الاستدعاء، حوّلوا `room.id` إلى `roomId`، و`avatar.url` إلى `image` (أو `null` عند حذف الصورة)، وبيانات country إلى `{id,name,code,imageUrl}`، وأرسلوا `title` و`description` عند تغيّرهما. لا ترسلوا `file_id` كصورة؛ endpoint يقبل URL/path عامًا فقط. `topic_id` ليس جزءًا من عقد `roomUpdated` الحالي.
+- أكّد فحص `RoomsContoller::join_room` أن LiveKit identity هي `user_id`؛ تطابق حاليًا `targetUserId` المأخوذ من هوية JWT الموثقة.
+
+لا تعتبروا أمثلة التكليف التاريخية أدناه وصفًا لعقد Laravel الحالي. استخدموا هذه الحالة وملف Laravel المشار إليه أعلاه عند التنسيق.
+
+مرجع Laravel الحالي هو `API_REFERENCE.md` في المستودع المذكور أعلاه. الفقرات التالية تحفظ طلبات التصميم الأصلية؛ ارجعوا إلى قسم الحالة أعلاه لتحديد ما نُفذ وما بقي.
 
 ## سياق المشروع الحالي
 
@@ -14,7 +28,7 @@
 
 توكن Sanctum الذي يستلمه العميل ليس JWT متوافقًا مع middleware الحالي. لا ترسلوه إلى الخادم على أنه JWT وتتوقعوا أن يتحقق منه محليًا. في API tokens يخزن Sanctum بصمة SHA-256 في قاعدة البيانات ويعيد قيمة التوكن الصريحة للعميل عند إنشائه. كما أن Sanctum SPA قد يستخدم session cookies بدل توكن API. راجعوا إصدار Laravel المستخدم لتأكيد الإعداد الفعلي.
 
-## المطلوب من فريق Laravel
+## التكليف الأصلي المحفوظ للمرجعية
 
 ### 1. توحيد طريقة إصدار هوية السوكيت
 
@@ -228,3 +242,110 @@
 ## توضيح نقل الصوت
 
 الصوت الفعلي عبر LiveKit على livekit.63on.com. يصدر POST /api/room/join توكن LiveKit مستقلًا عن socket_token الصادر من /api/socket/session. أحداث Node تنسق حالة التطبيق ومقاعد المايك؛ audioData ناقل قديم غير مستخدم في التطبيق. راجعوا [دليل LiveKit العربي](docs/socket-api/ar/livekit.md) لربط room.id مع room.username وحدود فرض الكتم والحظر الحالية.
+
+## تفاصيل التكليف الأصلي لسجل الإشراف والحظر وLiveKit وتحديث الغرفة
+
+هذا الملحق يحفظ العقد المطلوب من فريق Socket. وفق أحدث تحديث Laravel، إصدار جلسة Socket وأوامر الإشراف الدائمة وفحص الحظر قبل LiveKit token موجودة بالفعل. المتبقي موضح في حالة التكامل أعلاه؛ القسم التالي عن الحظر مرجعي ولا يطلب إعادة تنفيذ ما اكتمل.
+
+### 1. إضافة اسم غرفة LiveKit إلى authorize-join
+
+أضيفوا إلى `room` في رد `POST /api/internal/socket/v1/rooms/{roomId}/authorize-join`:
+
+    "liveKitRoomName": "1234567890123456"
+
+القيمة هي `rooms.username` الموثوقة. يستخدمها Node فقط عند استدعاء LiveKit Server API. يبقى `room.id` هو المعرّف الموحد لعضوية Socket وحمولات التطبيق. لا تأخذوا اسم LiveKit من طلب العميل.
+
+### 2. رفض توكن LiveKit للمستخدم المحظور — منفذ في Laravel
+
+نفّذ Laravel حاليًا هذا الفحص في `POST /api/room/join` قبل إصدار `data.token`. يجب أن يبقى السلوك ثابتًا: عند وجود حظر فعال للغرفة المحددة بـ`room.username` والمستخدم الحالي، أوقفوا إصدار التوكن وأعيدوا:
+
+    HTTP 403
+    {
+      "success": false,
+      "status": 403,
+      "error": {"code": "USER_BANNED", "message": "The user is banned from this room."},
+      "data": null
+    }
+
+لا تغيّروا `POST /api/room/guest/join` إلا إذا كانت سياسة المنتج تمنع الضيوف أيضًا؛ هذا الفحص يخص العضو المصادق عليه في `/api/room/join`.
+
+### 3. سجل idempotent لكل محاولة إشراف
+
+أضيفوا endpoint داخليًا، محميًا بـ`AuthenticateSocketService`، ويقبل مراحل `started` و`completed`:
+
+    POST /api/internal/socket/v1/moderation/audit-events
+
+طلب البدء:
+
+    {
+      "requestId": "uuid",
+      "phase": "started",
+      "roomId": "10",
+      "action": "removeUser",
+      "actorUserId": "42",
+      "actorRole": "owner",
+      "targetUserId": "55",
+      "reason": "Policy violation",
+      "occurredAt": "2026-10-26T10:30:00.000Z"
+    }
+
+الأفعال هي أسماء أحداث Socket الحالية: `banUser`, `unbanUser`, `removeUser`, `promoteTemporaryModerator`, `promoteFixedModerator`, `demoteFixedModerator`, `muteMic`, `unmuteMic`, `lockMessages`, `unlockMessages`. قد يكون `roomId` أو `actorUserId` أو `targetUserId` فارغًا عند رفض الطلب قبل تحديده. قيم الرتب: `owner`, `fixed_moderator`, `temporary_moderator`, `root`, `normal`.
+
+يحصل Node على `actorUserId` من `sub` في JWT الذي تحقّق من توقيعه، وعلى `actorRole` من حالة صلاحيات Socket المحملة من Laravel والرتبة المؤقتة الحية؛ لا يقبل هذه القيم من payload العميل. `occurredAt` من ساعة Node ولا يتغير عند retries.
+
+رد البدء:
+
+    {"requestId":"uuid","status":"started"}
+
+أعيدوا `status: "completed"` مع `result` إذا كان UUID قد اكتمل سابقًا؛ عندها يعيد Socket النتيجة السابقة ولا ينفذ الإجراء مرة أخرى. احتفظوا بسجل واحد ذي `request_id` فريد، وبصمة للحقول الثابتة؛ نفس UUID بحمولة مختلفة يعيد HTTP 409 `IDEMPOTENCY_KEY_REUSED`.
+
+يكرر Node نفس الطلب والـUUID في retries. إذا أعيدت النتيجة المجهولة بعد انقطاع الخدمة، يجب أن يعيد Laravel الحالة المسجلة لنفس UUID، لا أن ينشئ حدث تدقيق آخر.
+
+بعد اكتمال العملية يرسل Node الطلب نفسه مع:
+
+    {
+      "requestId": "uuid",
+      "phase": "completed",
+      "outcome": "success",
+      "code": "OK",
+      "result": {
+        "action": "removeUser",
+        "success": true,
+        "code": "OK",
+        "message": "Action completed.",
+        "roomId": "10",
+        "targetUserId": "55",
+        "requestId": "uuid",
+        "occurredAt": "2026-10-26T10:30:00.000Z"
+      }
+    }
+
+`outcome` هو `success` أو `rejected` أو `failed`. خزّنوا أيضًا رمز النتيجة والـresult والسبب والهدف والدور. اجعلوا إنهاء سجل التدقيق idempotent؛ تكرار مرحلة `completed` نفسها يعيد النتيجة المحفوظة، واختلافها يعيد 409. سجلوا الرفض المحلي مثل `FORBIDDEN` و`NOT_IN_ROOM` أيضًا.
+
+استخدموا جدولًا منفصلًا أو نموذج audit مناسبًا يحتوي UUID فريدًا وحقول المحاولة والنتيجة والوقت والحالة. لا تكتفوا بجدول `socket_moderation_commands` الحالي: فهو لا يسجل حاليًا كل حالات الرفض ولا أحداث `removeUser` و`promoteTemporaryModerator`.
+
+### 4. بث تحديث بيانات الغرفة بعد الحفظ
+
+بعد اعتماد Laravel تحديث عنوان أو صورة أو دولة أو description، أرسلوا من الخادم إلى Node:
+
+    POST {SOCKET_NODE_INTERNAL_URL}/internal/socket/v1/rooms/{roomId}/updates
+    Authorization: Bearer <SOCKET_INTERNAL_SERVICE_TOKEN>
+    Content-Type: application/json
+
+    {
+      "fields": {
+        "title": "Room title",
+        "image": "https://cdn.example.com/room.png",
+        "country": {"id":"3","name":"Saudi Arabia","code":"SA","imageUrl":"https://cdn.example.com/sa.png"},
+        "description": "Public description"
+      }
+    }
+
+`roomId` هو ID قاعدة البيانات، وأرسلوا الحقول التي تغيرت فقط. الخصائص العامة المقبولة هي `title` (حتى 100 حرف)، و`image` (نص/`null`)، و`description` (حتى 500 حرف/`null`)، و`country` (`null` أو كائنًا بالحقول `id`, `name`, `code`, `imageUrl`). لا ترسلوا بيانات داخلية أو اعتماد الخدمة. استدعوا Node بعد نجاح المعاملة فقط، وأعيدوا المحاولة عند فشل الاتصال باستخدام نفس بيانات التحديث. يبث Node إلى أعضاء الغرفة `roomUpdated` مع `roomId` والحقول العامة المتغيرة فقط.
+
+### 5. متغيرات البيئة والتسلسل
+
+- أضيفوا في Laravel `SOCKET_NODE_INTERNAL_URL` كعنوان داخلي لـNode. لا تضعوا مسار `/api` على هذا العنوان.
+- القيمة نفسها لـ`SOCKET_INTERNAL_SERVICE_TOKEN` موجودة في Laravel وNode؛ يستخدمها كلا الاتجاهين. احتفظوا بها server-side.
+- أضيفوا في Node `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` بقيم Server API المطابقة لخادم LiveKit. لا ترسلوها إلى التطبيق.
+- أوامر الإشراف الدائمة تستخدم حاليًا endpoint الأوامر الموجودة. أضيفوا `liveKitRoomName` إلى رد authorize-join لاستعادة الانضمام وإزالة المشاركين من LiveKit. اتفقوا على عقد سجل تدقيق للمحاولات المحلية والطرد والترقية المؤقتة قبل تفعيل هذه العمليات. اربطوا callback تحديث الغرفة بعد اعتماد الحمولة وتوقيت الحفظ.

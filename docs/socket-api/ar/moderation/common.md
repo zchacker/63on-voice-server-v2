@@ -9,6 +9,7 @@
     { "roomId": "room-123", "targetUserId": "user-42" }
 
 يمكن أن يضيف banUser وremoveUser حقل reason. يستخدم lockMessages وunlockMessages حقل roomId فقط. يستخدم demoteFixedModerator شكل الطلب المستهدف نفسه الذي يستخدمه promoteFixedModerator.
+يمكن لكل أمر أن يحتوي UUID اختياريًا باسم `requestId`؛ أعيدوا استخدامه عند إعادة المحاولة للعملية نفسها. ينشئ Node واحدًا إذا لم يرسله العميل.
 
 ## moderationResult
 
@@ -19,6 +20,8 @@
       "message": "Action completed.",
       "roomId": "room-123",
       "targetUserId": "user-42",
+      "requestId": "9d3d2333-315b-4e85-bb2c-6f3fdd586975",
+      "occurredAt": "2026-10-26T10:30:00.000Z",
       "state": {
         "banned": true,
         "role": "normal",
@@ -43,13 +46,19 @@
 
 ## الحفظ وسلوك الفشل
 
-ترسل الأوامر banUser وunbanUser وpromoteFixedModerator وdemoteFixedModerator وmuteMic وunmuteMic وlockMessages وunlockMessages إلى Laravel قبل تغيير ذاكرة Node أو بث النجاح. Laravel هو مصدر الحقيقة الدائم. عند الفشل أو انتهاء المهلة يعيد Node moderationResult مع success=false ولا يبث نجاحًا.
+ترسل الأوامر banUser وunbanUser وpromoteFixedModerator وdemoteFixedModerator وmuteMic وunmuteMic وlockMessages وunlockMessages إلى Laravel قبل تغيير ذاكرة Node أو بث النجاح. Laravel هو مصدر الحقيقة الدائم للحظر؛ لا يحتفظ Node بقائمة حظر مستقلة. تؤخذ `state.banned` من رد Laravel. تحافظ userBanned وuserUnbanned على الحمولة `{ roomId, userId }`، ولا تبثان إلا بعد تأكيد حفظ Laravel.
 
-يعمل promoteTemporaryModerator وremoveUser على الاتصال الحي فقط. يحذف دور temporary عند مغادرة آخر اتصال نشط للمستخدم. يستدعي Node Laravel عند كل انضمام لاستعادة الدور الثابت وحالة الحظر وكتم المايك وقفل الرسائل.
+يسجل مسار أوامر Laravel الحالي العمليات الدائمة الناجحة ورفض الأعمال/الصلاحيات الذي يصل إليه. يستخدم Socket هذا المسار إذا لم ينشر Laravel واجهة سجل التدقيق المنفصلة. الرفض المحلي في Node لا يظهر حاليًا في سجل Laravel.
+
+يعمل promoteTemporaryModerator وremoveUser على الاتصال الحي فقط، ولا يحولان الطرد إلى حظر أو الترقية إلى رتبة دائمة. لا تملك واجهات Laravel الحالية مسارًا لتسجيل هذين الإجراءين، لذلك يرفضهما Socket حتى تتوفر آلية تدقيق خادمية. يحذف دور temporary عند مغادرة آخر اتصال نشط للمستخدم. يستدعي Node Laravel عند كل انضمام لاستعادة الدور الثابت وأهلية الحظر وكتم المايك وقفل الرسائل.
+
+يحذف banUser وremoveUser المشارك النشط من LiveKit عبر واجهة الخادم قبل إرسال kicked للهدف. يجب أن يتضمن رد Laravel `room.liveKitRoomName` الموثوق (وهو `rooms.username`)؛ الرد الحالي لا يتضمنه، لذلك يرفض Node التحقق من الانضمام حتى يضيف Laravel هذا الحقل. أصبح Laravel يرفض إصدار توكن LiveKit من `POST /api/room/join` عند وجود حظر فعال، مع الرمز `USER_BANNED`.
 
 تحتوي حالة الأمر المحفوظ الناجح على القيم الحالية banned وrole وmicMuted وmessagesLocked. استخدموا هذه اللقطة لتحديث عناصر التحكم في الواجهة.
 
 لكل عملية Node نسخة حالة في الذاكرة. لا يوجد حاليًا Socket.IO adapter لتزامن الأحداث بين العمال؛ لذلك يصل البث الفوري إلى اتصالات العامل الذي استقبل الأمر.
+
+يبث تحديث بيانات الغرفة عبر نقطة Laravel إلى Node الداخلية الموضحة في [roomUpdated](../rooms/roomUpdated.md). نقطة Socket جاهزة، لكن Laravel لم يستدعها بعد حفظ التعديلات؛ لذلك لم يكتمل هذا الربط من الطرفين.
 
 ## أكواد الأخطاء الشائعة
 

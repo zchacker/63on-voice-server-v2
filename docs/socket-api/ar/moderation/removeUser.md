@@ -27,4 +27,4 @@ socket/moderation/moderation.events.js وmoderation.service.js وmoderation.vali
 
 ## الصوت عبر LiveKit
 
-نفذوا تغيرات المايك ومغادرة المشاركين عبر LiveKit SDK كما يوضح [دليل LiveKit](../livekit.md). لا تغير أوامر Socket.IO صلاحيات LiveKit ولا تفصل مشاركيه مباشرة من الخادم.
+يزيل Node المشارك النشط من LiveKit Server API قبل إنهاء عضوية Socket وإرسال `kicked`. فشل LiveKit يعيد moderationResult فاشلة ولا يكمل إخراج Socket. لا ينشئ هذا الأمر حظرًا دائمًا، لذلك يمكن للمستخدم العودة وطلب توكن LiveKit جديد. راجعوا [دليل LiveKit](../livekit.md).

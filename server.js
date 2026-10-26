@@ -9,11 +9,14 @@ if (typeof process.loadEnvFile === 'function') {
 }
 
 const http = require('http');
+const express = require('express');
 const { Server } = require('socket.io');
 
 const socketEvents = require('./socket');
+const { registerInternalHttpRoutes } = require('./services/internal-http.service');
 
-const server = http.createServer();
+const app = express();
+const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
@@ -23,6 +26,7 @@ const io = new Server(server, {
 });
 
 socketEvents(io);
+registerInternalHttpRoutes(app, io);
 
 const PORT = process.env.PORT || 3000;
 

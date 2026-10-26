@@ -21,6 +21,7 @@
 - users/disconnect.md
 - rooms/requestMic.md
 - rooms/leaveMic.md
+- rooms/roomUpdated.md
 
 ## الرسائل والهدايا
 

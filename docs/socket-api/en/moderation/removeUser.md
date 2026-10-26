@@ -27,4 +27,4 @@ socket/moderation/moderation.events.js; socket/moderation/moderation.service.js;
 
 ## LiveKit media
 
-Handle microphone and participant changes through the LiveKit SDK as described in [LiveKit integration](../livekit.md). Socket.IO state changes do not directly change LiveKit server permissions or disconnect its participants.
+Node removes an active participant through the LiveKit Server API before ending Socket membership and emitting `kicked`. A LiveKit failure returns moderationResult with failure and does not finish the Socket removal. This action creates no persistent ban, so the user can rejoin and request a fresh LiveKit token. See [LiveKit integration](../livekit.md).

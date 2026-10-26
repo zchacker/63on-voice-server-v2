@@ -21,6 +21,7 @@ This folder documents the active Socket.IO contract directly from the event hand
 - users/disconnect.md
 - rooms/requestMic.md
 - rooms/leaveMic.md
+- rooms/roomUpdated.md
 
 ## Chat and gifts
 

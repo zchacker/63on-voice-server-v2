@@ -62,9 +62,9 @@ Do not send audio frames through Socket.IO. Socket.IO and LiveKit connection sta
 
 ## Current enforcement boundary
 
-Node persists moderation through Laravel and emits Socket.IO events, but the current Node implementation does not call LiveKit server APIs to mute tracks, change publish grants, or remove participants. Frontend microphone/leave handlers provide cooperative behavior only.
+Node calls the LiveKit Server API to remove active participants on `banUser` and `removeUser`. It does not currently mute tracks or change publish grants for mic moderation; the frontend must still disable/unpublish its local mic on `micMuted`.
 
-The existing Laravel /api/room/join controller grants publishing/subscribing and does not currently check persisted bans or mic-seat eligibility. Its token issuance is therefore not proof that Socket room authorization succeeded. Enforcing bans, removal, and microphone restrictions against modified clients requires Laravel/Node server integration with LiveKit permissions and participant management; do not assume a Socket.IO ban automatically disconnects LiveKit media.
+The current Laravel `/api/room/join` controller checks for an active persisted room ban and returns `USER_BANNED` before issuing a token. It does not check mic-seat eligibility or enforce a Socket mic mute at LiveKit. Socket participant removal also needs Laravel's `/authorize-join` response to include the trusted `room.liveKitRoomName` (`rooms.username`); the currently documented response omits that field.
 
 ## Sources
 

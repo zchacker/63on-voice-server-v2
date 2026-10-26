@@ -15,7 +15,7 @@
 
 ## الفشل
 
-يحدد Laravel هل يوجد حظر فعال. لا يمسح Node نسخته المحلية ولا يبث userUnbanned إلا بعد نجاح Laravel. تعاد أخطاء الخادم، ومنها USER_NOT_BANNED، داخل moderationResult.
+يحدد Laravel هل يوجد حظر فعال. لا يحتفظ Node بقائمة حظر محلية، ويبث userUnbanned بحمولته الحالية { roomId, userId } فقط بعد نجاح Laravel. تعاد أخطاء الخادم، ومنها USER_NOT_BANNED، داخل moderationResult.
 
 إلغاء الحظر لا يعيد socket المطرود تلقائيًا؛ على المستخدم إرسال joinRoom مجددًا.
 

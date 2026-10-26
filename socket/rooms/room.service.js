@@ -93,6 +93,7 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
         moderation.syncFromAuthorization(roomId, userId, authorization);
         socket.roomId = roomId;
         socket.requestedRoomId = requestedRoomId;
+        socket.liveKitRoomName = authorization.room.liveKitRoomName;
         socket.user = user;
         state.addRoomUser(roomId, socket.id, user);
         io.to(roomId).emit('userList', state.getRoomUsers(roomId));
@@ -173,11 +174,16 @@ function leaveCurrentRoom(io, socket) {
     socket.leave(roomId);
     socket.roomId = null;
     socket.requestedRoomId = null;
+    socket.liveKitRoomName = null;
     socket.user = null;
     moderation.handleLeave(io, socket, roomId, userId);
     io.to(roomId).emit('userList', state.getRoomUsers(roomId));
     if (micChanged) io.to(roomId).emit('micUpdate', { ...(state.getMicSpots(roomId) || {}) });
     state.clearRoomState(roomId);
+}
+
+function broadcastRoomUpdated(io, roomId, fields) {
+    io.to(roomId).emit('roomUpdated', { roomId, ...fields });
 }
 
 function leaveRoom(io, socket) {
@@ -187,4 +193,4 @@ function leaveRoom(io, socket) {
     leaveCurrentRoom(io, socket);
 }
 
-module.exports = { joinRoom, requestMic, leaveMic, audioData, leaveRoom };
+module.exports = { joinRoom, requestMic, leaveMic, audioData, leaveRoom, broadcastRoomUpdated };

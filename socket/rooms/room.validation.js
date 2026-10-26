@@ -72,6 +72,9 @@ function validateJoinAuthorization(result, authenticatedUserId) {
     if (!room || typeof room !== 'object' || Array.isArray(room)
         || !hasIdentifier(room.id)
         || !hasIdentifier(room.ownerId)
+        || typeof room.liveKitRoomName !== 'string'
+        || !room.liveKitRoomName.trim()
+        || room.liveKitRoomName.length > 255
         || typeof room.messagesLocked !== 'boolean') {
         return {
             valid: false,
@@ -113,6 +116,66 @@ function validateJoinAuthorization(result, authenticatedUserId) {
     return { valid: true };
 }
 
+function validateRoomUpdateFields(fields) {
+    const allowedFields = new Set(['title', 'image', 'country', 'description']);
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+        return { valid: false, code: 'INVALID_ROOM_UPDATE', message: 'Updated room fields are required.' };
+    }
+    const keys = Object.keys(fields);
+    if (!keys.length || keys.some((key) => !allowedFields.has(key))) {
+        return { valid: false, code: 'INVALID_ROOM_UPDATE', message: 'Only public room fields may be broadcast.' };
+    }
+
+    const normalized = {};
+    if (Object.hasOwn(fields, 'title')) {
+        if (typeof fields.title !== 'string' || !fields.title.trim() || fields.title.length > 100) {
+            return { valid: false, code: 'INVALID_ROOM_UPDATE', message: 'title must be a non-empty string up to 100 characters.' };
+        }
+        normalized.title = fields.title;
+    }
+    if (Object.hasOwn(fields, 'image')) {
+        if (fields.image !== null && (typeof fields.image !== 'string' || fields.image.length > 2048)) {
+            return { valid: false, code: 'INVALID_ROOM_UPDATE', message: 'image must be a public URL/path or null.' };
+        }
+        normalized.image = fields.image;
+    }
+    if (Object.hasOwn(fields, 'description')) {
+        if (fields.description !== null
+            && (typeof fields.description !== 'string' || fields.description.length > 500)) {
+            return { valid: false, code: 'INVALID_ROOM_UPDATE', message: 'description must be a string up to 500 characters or null.' };
+        }
+        normalized.description = fields.description;
+    }
+    if (Object.hasOwn(fields, 'country')) {
+        const country = fields.country;
+        if (country === null) {
+            normalized.country = null;
+            return { valid: true, fields: normalized };
+        }
+        const idIsValid = typeof country?.id === 'string' && Boolean(country.id.trim());
+        if (!country || typeof country !== 'object' || Array.isArray(country)
+            || Object.keys(country).some((key) => !['id', 'name', 'code', 'imageUrl'].includes(key))
+            || !idIsValid
+            || typeof country.name !== 'string'
+            || typeof country.code !== 'string'
+            || (country.imageUrl !== null && typeof country.imageUrl !== 'string')) {
+            return {
+                valid: false,
+                code: 'INVALID_ROOM_UPDATE',
+                message: 'country must contain only id, name, code, and nullable imageUrl.'
+            };
+        }
+        normalized.country = {
+            id: country.id,
+            name: country.name,
+            code: country.code,
+            imageUrl: country.imageUrl
+        };
+    }
+
+    return { valid: true, fields: normalized };
+}
+
 function validateMicSpot(spotNumber) {
     if (!Number.isInteger(spotNumber) || spotNumber < MIN_MIC_SPOT || spotNumber > MAX_MIC_SPOT) {
         return {
@@ -135,6 +198,7 @@ module.exports = {
     validateRoomPayload,
     validateJoin,
     validateJoinAuthorization,
+    validateRoomUpdateFields,
     validateMicSpot,
     validateJoinedUser
 };

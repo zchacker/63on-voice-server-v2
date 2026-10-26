@@ -8,4 +8,6 @@ The Arabic reference is under docs/socket-api/ar/ and starts at [الفهرس ا
 
 These references describe the active code under socket/ and exclude demo/. Room joins and persistent moderation actions are authorized and stored through Laravel; temporary roles and live Socket.IO state remain process-local.
 
+The server emits `roomUpdated` to active room members after a successful Laravel room update. See [server events](docs/socket-api/en/server-events.md) and the [Laravel-to-Socket contract](docs/socket-api/en/rooms/roomUpdated.md).
+
 Voice audio uses LiveKit at livekit.63on.com; Laravel POST /api/room/join returns its token. Read the [LiveKit guide](docs/socket-api/en/livekit.md). audioData is a legacy handler unused by the current application.

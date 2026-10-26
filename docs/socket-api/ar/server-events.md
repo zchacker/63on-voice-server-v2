@@ -28,7 +28,8 @@
 | userRemoved | الغرفة | { roomId, userId }. |
 | moderatorUpdated | الغرفة | { roomId, userId, role }. |
 | micModerationUpdated | الغرفة | { roomId, userId, muted }. |
-| moderationResult | المشرف الذي أرسل الطلب | { action, success, code, message, roomId, targetUserId?, role?, state? }. تظهر state للأوامر المحفوظة لدى Laravel. |
+| roomUpdated | الغرفة | { roomId, title?, image?, country?, description? }؛ الحقول العامة المتغيرة فقط. |
+| moderationResult | المشرف الذي أرسل الطلب | { action, success, code, message, roomId, targetUserId?, role?, state?, requestId, occurredAt }. إذا لم يرسل العميل UUID ينشئ Node قيمة requestId. |
 
 أخطاء الاتصال يرسلها Socket.IO نفسه كحدث client-side اسمه connect_error، وليست أحداثًا يطلقها handler في التطبيق.
 لا توجد أحداث تطبيق باسم userJoined أو userLeft.
@@ -38,3 +39,5 @@
 ملفات events.js داخل socket والموديولات التي تستدعيها.
 
 يستخدم نقل الصوت [LiveKit](livekit.md). حدثا audioData أعلاه قديمان باقِيان في المصدر ولا تستخدمهما الواجهة الحالية. اربطوا takeMic وleaveMic وmicMuted وkicked بإجراءات LiveKit SDK المناسبة.
+
+تحافظ userBanned وuserUnbanned على الحمولة الحالية `{ roomId, userId }`، ولا تبثان إلا بعد تأكيد Laravel حفظ الأمر. يصل kicked بعد إخراج الهدف من غرفة Socket.

@@ -11,11 +11,11 @@
 ## مخرجات النجاح
 
 - يستقبل المنفذ moderationResult مع action=banUser وsuccess=true.
-- تستقبل اتصالات الهدف النشطة kicked { roomId, userId, reason } وتغادر الغرفة وتفقد مقاعد المايك.
+- بعد إزالة عضوية Socket، تستقبل اتصالات الهدف النشطة kicked { roomId, userId, reason } وتفقد مقاعد المايك.
 - تستقبل الغرفة userBanned { roomId, userId } وuserList وmicUpdate.
 - يرفض joinRoom اللاحق إذا استخدم userId نفسه بسبب USER_BANNED.
 
-يحفظ Laravel الحظر حتى إذا لم يكن للهدف اتصال نشط. لا يغير Node حالته المحلية ولا يبث النجاح إلا بعد تأكيد Laravel.
+يحفظ Laravel الحظر حتى إذا لم يكن للهدف اتصال نشط. لا يحتفظ Node بنسخة من قائمة المحظورين؛ ويستخدم `state.banned` المعادة من Laravel. بعد تأكيد Laravel للحظر، يزيل Node مشارك LiveKit النشط وينهي عضوية Socket ويرسل userBanned بحمولته الحالية. إذا فشلت عملية LiveKit، تعود moderationResult فاشلة رغم بقاء الحظر الدائم محفوظًا. يجب أن يرفض Laravel إصدار توكن LiveKit للمحظور؛ وما زال هذا الفحص مطلوبًا في نسخة Laravel التي راجعناها.
 
 ## التحقق والأخطاء
 
@@ -27,4 +27,4 @@ socket/moderation/moderation.events.js وmoderation.service.js وmoderation.vali
 
 ## الصوت عبر LiveKit
 
-نفذوا تغيرات المايك ومغادرة المشاركين عبر LiveKit SDK كما يوضح [دليل LiveKit](../livekit.md). لا تغير أوامر Socket.IO صلاحيات LiveKit ولا تفصل مشاركيه مباشرة من الخادم.
+يزيل Node المشارك النشط من LiveKit Server API. وعلى الواجهة مغادرة غرفة LiveKit المحلية بعد وصول `kicked`. راجعوا [دليل LiveKit](../livekit.md).

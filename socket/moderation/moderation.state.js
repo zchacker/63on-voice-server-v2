@@ -1,6 +1,5 @@
 // نحفظ UUID للأوامر مجهولة النتيجة حتى نسترجعها من Laravel قبل السماح بالدخول مجددًا.
 const pendingCommands = new Map();
-const bannedUsers = new Map();
 
 function rememberPendingCommand(roomId, pending) { pendingCommands.set(roomId, pending); }
 function getPendingCommand(roomId) { return pendingCommands.get(roomId); }
@@ -14,28 +13,6 @@ const lockedRooms = new Set();
 function roomSet(map, roomId) {
     if (!map.has(roomId)) map.set(roomId, new Set());
     return map.get(roomId);
-}
-
-function roomMap(map, roomId) {
-    if (!map.has(roomId)) map.set(roomId, new Map());
-    return map.get(roomId);
-}
-
-function ban(roomId, userId, details) {
-    roomMap(bannedUsers, roomId).set(userId, details);
-}
-
-function unban(roomId, userId) {
-    const users = bannedUsers.get(roomId);
-    if (!users) return false;
-
-    const removed = users.delete(userId);
-    if (!users.size) bannedUsers.delete(roomId);
-    return removed;
-}
-
-function getBan(roomId, userId) {
-    return bannedUsers.get(roomId)?.get(userId);
 }
 
 function setPersistentRole(roomId, userId, role) {
@@ -136,7 +113,6 @@ function areMessagesLocked(roomId) {
 }
 
 function clearRoom(roomId) {
-    bannedUsers.delete(roomId);
     temporaryModerators.delete(roomId);
     fixedModerators.delete(roomId);
     roomOwners.delete(roomId);
@@ -148,9 +124,6 @@ module.exports = {
     rememberPendingCommand,
     getPendingCommand,
     clearPendingCommand,
-    ban,
-    unban,
-    getBan,
     setPersistentRole,
     getPersistentRole,
     promoteTemporary,
