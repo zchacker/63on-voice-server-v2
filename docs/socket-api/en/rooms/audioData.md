@@ -1,5 +1,7 @@
 # audioData
 
+**Legacy / unused by the application:** Audio now runs through LiveKit at livekit.63on.com, with a token from Laravel POST /api/room/join. Do not integrate this event for current audio. The contract below documents the handler still present in the source. See [LiveKit integration](../livekit.md).
+
 **Direction:** client to server; raw Socket.IO payload.
 
 ## Input

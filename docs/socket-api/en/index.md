@@ -2,8 +2,11 @@
 
 This folder documents the active Socket.IO contract directly from the event handlers and their services under socket/. Demo code is excluded. Each client-emitted event has its own page.
 
+- Audio: [LiveKit integration](livekit.md) — livekit.63on.com, token from Laravel POST /api/room/join. audioData is legacy and unused by the application.
+
 ## Connection and common rules
 
+- Start with [frontend-integration.md](frontend-integration.md) for the full connection and room workflow.
 - See connection.md for URL, handshake authentication, identity rules, and server configuration.
 - This is Socket.IO, not raw WebSocket. The current server listens on PORT or 3000.
 - The server does not use acknowledgement callbacks. Read each endpoint page for its events and error events.
@@ -18,7 +21,6 @@ This folder documents the active Socket.IO contract directly from the event hand
 - users/disconnect.md
 - rooms/requestMic.md
 - rooms/leaveMic.md
-- rooms/audioData.md
 
 ## Chat and gifts
 
@@ -33,6 +35,7 @@ This folder documents the active Socket.IO contract directly from the event hand
 - moderation/removeUser.md
 - moderation/promoteTemporaryModerator.md
 - moderation/promoteFixedModerator.md
+- moderation/demoteFixedModerator.md
 - moderation/muteMic.md
 - moderation/unmuteMic.md
 - moderation/lockMessages.md
@@ -40,7 +43,11 @@ This folder documents the active Socket.IO contract directly from the event hand
 
 ## Important implementation limits
 
-- Room access is not checked against Laravel or a database.
-- State is process-local. Bans, moderator roles, mic mutes, and message locks are lost on server restart.
-- JWT is optional for joining. Sessions without one can join as regular users with a client-supplied userId; such identities are not trusted for moderation.
+- Laravel authorizes each room join and persists bans, fixed roles, mic mutes, and message locks.
+- JWT is required to join. A connection may open without one, but joinRoom rejects it.
+- Temporary roles and live socket state are process-local; multiple Node workers do not share live broadcasts.
 - Gifts are broadcast only; no payment or balance validation is implemented.
+
+## Legacy events retained in source
+
+- [audioData](rooms/audioData.md): not used by the LiveKit audio flow.

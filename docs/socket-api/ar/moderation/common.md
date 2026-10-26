@@ -1,14 +1,14 @@
 # الإشراف: القواعد المشتركة
 
-لكل أمر حدث مستقل. لا تستخدم الأحداث acknowledgement أو callback. كل طلب يعيد moderationResult إلى المشرف المرسل.
+لكل أمر حدث Socket.IO مستقل، ويعيد moderationResult إلى المنفذ. لا توجد acknowledgement callbacks.
 
-## شكل الطلب المشترك
+## أشكال الطلبات
 
 الأمر المستهدف:
 
     { "roomId": "room-123", "targetUserId": "user-42" }
 
-يمكن أن يضيف banUser وremoveUser حقل reason نصيًا. أما lockMessages وunlockMessages فيستخدمان roomId فقط.
+يمكن أن يضيف banUser وremoveUser حقل reason. يستخدم lockMessages وunlockMessages حقل roomId فقط. يستخدم demoteFixedModerator شكل الطلب المستهدف نفسه الذي يستخدمه promoteFixedModerator.
 
 ## moderationResult
 
@@ -19,30 +19,49 @@
       "message": "Action completed.",
       "roomId": "room-123",
       "targetUserId": "user-42",
-      "role": "temporary"
+      "state": {
+        "banned": true,
+        "role": "normal",
+        "micMuted": false,
+        "messagesLocked": false
+      }
     }
 
-targetUserId وrole اختياريان. الطلب الفاشل يعيد success=false مع code وmessage.
+قد لا يظهر targetUserId أو role إذا لم ينطبق. تتضمن الأوامر المحفوظة لقطة الحالة التي أعادها Laravel. عند الفشل تكون success=false مع code وmessage.
 
-## رتب المنفذ
+## الأدوار والصلاحيات
 
-- root: معرف JWT الموثق موجود في SOCKET_ROOT_MODERATOR_IDS.
-- fixed: دور ثابت محفوظ في عملية Node الحالية.
-- temporary: دور لهذه الغرفة إلى أن يغادر آخر socket للمستخدم.
-- normal: لا يملك صلاحية إشراف.
+- owner: مالك الغرفة كما يحدده Laravel.
+- fixed: مشرف دائم تحمّله Node من Laravel.
+- temporary: رتبة للغرفة محفوظة في ذاكرة Node وتنتهي عند مغادرة آخر اتصال للمستخدم.
+- root: معرف محلي ضمن SOCKET_ROOT_MODERATOR_IDS. لا يتجاوز قرار Laravel للأوامر المحفوظة.
+- normal: مستخدم عادي.
 
-يجب أن يكون المنفذ داخل الغرفة المحددة وأن يكون لديه JWT صالح يطابق sub مع userId المسجل. لا تمنح حقول role القادمة من العميل صلاحيات. يستطيع root ترقية مشرف ثابت. يستطيع fixed أو root منح رتبة مؤقتة. يستطيع temporary الحظر والطرد والكتم وفتح المايك وقفل وفتح الرسائل، ولا يستطيع الترقية.
+يلزم JWT موثق للانضمام والإشراف، ويجب أن يطابق sub معرف المستخدم المنضم. لا تمنح حقول الدور المرسلة من العميل أي صلاحية. يعيد Laravel التحقق من الأوامر المحفوظة.
 
-لا يستطيع المشرف استهداف نفسه أو root. لا يستطيع غير root إدارة fixed. ولا يمكن ترقية fixed مرة أخرى.
+مالك الغرفة فقط يستطيع ترقية أو خفض مشرف fixed. يستطيع owner وfixed وtemporary تنفيذ أوامر الإدارة التشغيلية التي يسمح بها Laravel. يجب خفض رتبة fixed قبل استهدافه بأمر إشراف آخر. لا يمكن للمستخدم استهداف نفسه أو مالك الغرفة.
 
-## أكواد الأخطاء
+## الحفظ وسلوك الفشل
 
-قد تعيد الأوامر المستهدفة: INVALID_ROOM_ID أو NOT_IN_ROOM أو INVALID_TARGET_USER_ID أو FORBIDDEN أو SELF_TARGET أو INSUFFICIENT_ROLE أو FIXED_MODERATOR أو TARGET_NOT_IN_ROOM أو TARGET_NOT_AUTHENTICATED أو USER_NOT_BANNED. أوامر القفل قد تعيد NOT_IN_ROOM أو FORBIDDEN. يحمل moderationResult كل هذه الأخطاء.
+ترسل الأوامر banUser وunbanUser وpromoteFixedModerator وdemoteFixedModerator وmuteMic وunmuteMic وlockMessages وunlockMessages إلى Laravel قبل تغيير ذاكرة Node أو بث النجاح. Laravel هو مصدر الحقيقة الدائم. عند الفشل أو انتهاء المهلة يعيد Node moderationResult مع success=false ولا يبث نجاحًا.
 
-## عمر الحالة
+يعمل promoteTemporaryModerator وremoveUser على الاتصال الحي فقط. يحذف دور temporary عند مغادرة آخر اتصال نشط للمستخدم. يستدعي Node Laravel عند كل انضمام لاستعادة الدور الثابت وحالة الحظر وكتم المايك وقفل الرسائل.
 
-حالة الإشراف كلها في ذاكرة العملية وتضيع عند إعادة تشغيل Node. لا يوجد اتصال بـLaravel أو حفظ في قاعدة بيانات.
+تحتوي حالة الأمر المحفوظ الناجح على القيم الحالية banned وrole وmicMuted وmessagesLocked. استخدموا هذه اللقطة لتحديث عناصر التحكم في الواجهة.
+
+لكل عملية Node نسخة حالة في الذاكرة. لا يوجد حاليًا Socket.IO adapter لتزامن الأحداث بين العمال؛ لذلك يصل البث الفوري إلى اتصالات العامل الذي استقبل الأمر.
+
+## أكواد الأخطاء الشائعة
+
+INVALID_ROOM_ID وAUTHENTICATION_REQUIRED وNOT_IN_ROOM وINVALID_TARGET_USER_ID وFORBIDDEN وSELF_TARGET وPROTECTED_TARGET وTARGET_NOT_IN_ROOM وTARGET_NOT_AUTHENTICATED وUSER_NOT_BANNED وLARAVEL_TIMEOUT وLARAVEL_UNAVAILABLE وLARAVEL_SERVICE_AUTH_FAILED وLARAVEL_STATE_MISMATCH.
 
 ## المصدر
 
-socket/moderation/moderation.events.js وmoderation.service.js وmoderation.validation.js وmoderation.state.js.
+socket/moderation/moderation.events.js وmoderation.service.js وmoderation.validation.js وmoderation.state.js وservices/laravel.service.js.
+
+
+## استعادة النتيجة عند فقد رد Laravel
+
+يعيد Node محاولة الطلب المتعثر حتى ثلاث مرات بنفس requestId والحمولة، ويحافظ على فحصي تطابق requestId. إذا بقيت النتيجة مجهولة، يصل kicked للأعضاء النشطين وتُنهى عضويتهم دون بث نجاح. يحتفظ Node بالأمر المعلق؛ ويتطلب الانضمام الجديد استرجاع نتيجته بنفس UUID ثم طلب authorize-join حديث. يحذف الرفض القطعي من Laravel الأمر المعلق.
+
+تقبل أوامر الإشراف roomId الموحد كنص أو عدد آمن، أو المعرّف الذي استخدمه المنفذ عند دخوله. تستخدم الردود roomId الموحد. تستخدم state.role تسميات Laravel: owner/fixed_moderator/normal؛ وتستخدم roleUpdated القيم owner/fixed/temporary/root/normal.

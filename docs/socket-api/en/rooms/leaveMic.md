@@ -4,6 +4,8 @@
 
 ## Input
 
+This event coordinates the microphone seat only. Actual microphone publishing/unpublishing uses LiveKit SDK. See [LiveKit integration](../livekit.md).
+
     { "spotNumber": 2 }
 
 spotNumber must be an integer from 0 through 7. The user must have joined a room and must own that spot by matching userId.

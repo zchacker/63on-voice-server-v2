@@ -1,24 +1,24 @@
 # promoteFixedModerator
 
-**الاتجاه:** من مشرف root إلى الخادم.
+**الاتجاه:** من مالك الغرفة المصادق إلى الخادم.
 
 ## الإدخال
 
     { "roomId": "room-123", "targetUserId": "user-44" }
 
-يمكن أن يكون الهدف غير متصل. هذا الأمر متاح لـroot فقط.
+يمكن أن يكون الهدف غير متصل. يتحقق Laravel من أن المنفذ مالك الغرفة وأن الهدف مؤهل للترقية.
 
 ## مخرجات النجاح
 
-- يستقبل المنفذ moderationResult مع role=fixed.
+- يستقبل المنفذ moderationResult مع role=fixed ولقطة الحالة الحالية من Laravel.
 - إن كان للهدف اتصالات نشطة بالغرفة، تستقبل roleUpdated { roomId, userId, role: "fixed" }.
 - تستقبل الغرفة moderatorUpdated { roomId, userId, role: "fixed" }.
 
-تبقى الرتبة بعد مغادرة الغرفة لكنها تنتهي عند توقف عملية Node؛ لا يوجد حفظ في قاعدة بيانات. تطبق عند دخول المستخدم التالي.
+يرسل Node الأمر promote_fixed إلى Laravel قبل تغيير النسخة المحلية أو بث النجاح. تبقى الرتبة بعد مغادرة الهدف وتستمر بعد إعادة تشغيل Node لأن Laravel يحفظها.
 
 ## الفشل
 
-FORBIDDEN إذا لم يكن المنفذ root؛ INSUFFICIENT_ROLE إذا كان الهدف root؛ FIXED_MODERATOR إذا كان الهدف fixed بالفعل. راجع moderation/common.md.
+FORBIDDEN إذا لم يكن المنفذ مالك الغرفة؛ PROTECTED_TARGET إذا كان الهدف مالكًا أو root؛ LARAVEL_TIMEOUT أو LARAVEL_UNAVAILABLE عند تعذر إكمال الأمر في Laravel. راجع moderation/common.md.
 
 ## المصدر
 

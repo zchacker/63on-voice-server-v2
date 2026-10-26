@@ -15,11 +15,11 @@ Target may be offline. Actor must be an authorized moderator joined to roomId.
 - Room receives micModerationUpdated { roomId, userId, muted: true } and micUpdate.
 - On a later join, the target receives micMuted again.
 
-The server rejects the muted user's requestMic and audioData events. The frontend should stop its local publishing when it receives micMuted.
+The server rejects the muted user's requestMic. On micMuted, the frontend must disable/unpublish its LiveKit microphone. Node does not currently force a mute on the LiveKit server. The audioData mute check belongs to an unused legacy relay. See [LiveKit integration](../livekit.md).
 
 ## Persistence and trust
 
-Mute is process-local and resets on server restart. Enforcement against a client without JWT is not reliable because that client can claim another userId.
+Mute is stored by Laravel and restored during room authorization after Node restarts. Node only changes its local mirror, clears the target's mic spots, and broadcasts after Laravel confirms the mute.
 
 ## Source
 

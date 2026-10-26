@@ -13,3 +13,7 @@
 ## المصدر
 
 socket/users/user.events.js وuser.service.js وsocket/rooms/room.service.js.
+
+## اتصال LiveKit
+
+ينظف هذا الحدث حالة Socket.IO ولا يغلق اتصال LiveKit المستقل. عند مغادرة الغرفة عمدًا غادروا LiveKit عبر SDK أيضًا. عند الانقطاع عالجوا حالة كل اتصال بصورة مستقلة؛ راجعوا [دليل LiveKit](../livekit.md).

@@ -6,14 +6,14 @@
 
     { "roomId": "room-123" }
 
-يجب أن يكون المنفذ في الغرفة ويحمل رتبة root أو fixed أو temporary.
+يجب أن يكون المنفذ موثقًا ومنضمًا للغرفة ومصرحًا له محليًا ومن Laravel. قد يسمح Laravel لمالك الغرفة أو fixed أو temporary المؤهل.
 
 ## مخرج النجاح
 
 - يستقبل المنفذ moderationResult مع action=unlockMessages.
 - تستقبل الغرفة messageLockUpdated { roomId, locked: false, changedBy, normalUsersOnly: false }.
 
-بعدها يستطيع جميع أعضاء الغرفة إرسال الرسائل. فك قفل غرفة مفتوحة يعتبر نجاحًا أيضًا. الحالة محفوظة في ذاكرة العملية وتضيع عند إعادة التشغيل.
+بعد تأكيد Laravel يستطيع جميع الأعضاء إرسال الرسائل. يرسل Node الأمر unlock_messages أولًا ولا يحدّث نسخته المحلية أو يبث التغيير إلا بعد التأكيد. يحفظ Laravel حالة القفل.
 
 ## المصدر
 

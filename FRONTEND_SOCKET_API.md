@@ -1,9 +1,11 @@
 # مرجع Socket.IO للواجهة الأمامية
 
-أصبح عقد الأحداث موثقًا بملف مستقل لكل حدث تحت docs/socket-api/ar/. ابدأ من [فهرس API العربي](docs/socket-api/ar/index.md).
+ابدأ من [دليل ربط الواجهة](docs/socket-api/ar/frontend-integration.md)، ثم استخدم [فهرس API العربي](docs/socket-api/ar/index.md) لفتح مواصفة كل حدث في ملف مستقل.
 
 توضح كل صفحة الحمولة التي يرسلها العميل، وأحداث رد الخادم، وأكواد الأخطاء، والسلوك الفعلي، وملفات المصدر. تفاصيل الاتصال وJWT في [صفحة الاتصال](docs/socket-api/ar/connection.md)، وقائمة كل أحداث الخادم في [أحداث الخادم](docs/socket-api/ar/server-events.md).
 
 المرجع الإنجليزي الأساسي موجود في docs/socket-api/en/ ويبدأ من [API index](docs/socket-api/en/index.md).
 
-تصف هذه المراجع الكود الفعلي تحت socket/، ولا تشمل demo/. وتذكر قيود الذاكرة المؤقتة والهوية الحالية.
+تصف هذه المراجع الكود الفعلي تحت socket/ ولا تشمل demo/. يتحقق Laravel من دخول الغرفة ويحفظ أوامر الإشراف الدائمة؛ وتبقى الأدوار المؤقتة وحالة الاتصالات الحية في ذاكرة Node.
+
+يعمل الصوت عبر LiveKit على livekit.63on.com، ويعيد Laravel توكنه من POST /api/room/join. راجعوا [دليل LiveKit](docs/socket-api/ar/livekit.md). الحدث audioData قديم وغير مستخدم في التطبيق الحالي.

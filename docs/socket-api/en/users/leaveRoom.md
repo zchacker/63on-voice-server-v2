@@ -21,3 +21,7 @@ Sending this event while not in a room is a no-op.
 ## Source
 
 socket/users/user.events.js; socket/users/user.service.js; socket/rooms/room.service.js.
+
+## LiveKit connection
+
+This event cleans up Socket.IO state. It does not close a separate LiveKit connection. On intentional room exit, leave LiveKit through its SDK too. For interruptions, reconcile the connection states independently; see [LiveKit integration](../livekit.md).

@@ -23,7 +23,7 @@ The role ends when the target's last socket leaves the room or disconnects.
 - FIXED_MODERATOR
 - Plus common role and payload errors in moderation/common.md.
 
-A temporary moderator cannot promote another moderator. Fixed/root moderators can grant a temporary role.
+A temporary moderator cannot promote another moderator. The room owner, fixed moderator, or local root may grant this live temporary role. It is not stored by Laravel.
 
 ## Source
 

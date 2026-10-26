@@ -6,7 +6,7 @@
 
     { "roomId": "room-123", "targetUserId": "user-42", "reason": "Spam" }
 
-يجب أن يكون roomId وtargetUserId نصين غير فارغين. reason اختياري، ويحفظ بحد أقصى 300 حرف.
+يجب أن يكون roomId وtargetUserId نصين غير فارغين. reason اختياري؛ يقصه Node إلى 1000 حرف ليتوافق مع عقد أوامر Laravel.
 
 ## مخرجات النجاح
 
@@ -15,16 +15,16 @@
 - تستقبل الغرفة userBanned { roomId, userId } وuserList وmicUpdate.
 - يرفض joinRoom اللاحق إذا استخدم userId نفسه بسبب USER_BANNED.
 
-يحفظ الحظر حتى إذا لم يكن للهدف اتصال نشط.
+يحفظ Laravel الحظر حتى إذا لم يكن للهدف اتصال نشط. لا يغير Node حالته المحلية ولا يبث النجاح إلا بعد تأكيد Laravel.
 
 ## التحقق والأخطاء
 
 يجب أن يكون المنفذ موثقًا ومنضمًا للغرفة وذا رتبة كافية. الأخطاء تعاد في moderationResult، مثل INVALID_ROOM_ID وNOT_IN_ROOM وINVALID_TARGET_USER_ID وFORBIDDEN وSELF_TARGET وINSUFFICIENT_ROLE.
 
-## حد الثقة
-
-هوية الهدف مرتبطة بـsub عند استخدام JWT. يستطيع عميل بلا JWT ادعاء userId مختلف، لذلك الحظر غير موثوق ضد الجلسات غير الموثقة.
-
 ## المصدر
 
 socket/moderation/moderation.events.js وmoderation.service.js وmoderation.validation.js وmoderation.state.js.
+
+## الصوت عبر LiveKit
+
+نفذوا تغيرات المايك ومغادرة المشاركين عبر LiveKit SDK كما يوضح [دليل LiveKit](../livekit.md). لا تغير أوامر Socket.IO صلاحيات LiveKit ولا تفصل مشاركيه مباشرة من الخادم.

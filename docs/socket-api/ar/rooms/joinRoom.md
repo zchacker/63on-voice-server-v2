@@ -4,39 +4,46 @@
 
 ## الإدخال
 
-    {
-      "roomId": "room-123",
-      "user": {
-        "userId": "user-42",
-        "name": "Sara",
-        "avatar": "https://example.com/sara.png"
-      }
-    }
+    { "roomId": "room-123" }
 
-يجب أن يكون roomId نصًا غير فارغ، وuser كائنًا عاديًا. دون JWT صالح يجب أن يكون user.userId نصًا غير فارغ. مع JWT صالح يستبدل الخادم القيمة بـ sub؛ ويمكن عندها حذف userId من الكائن. يحذف الخادم الحقول role وisModerator وpermissions من user.
+يقبل roomId معرف قاعدة البيانات كعدد صحيح موجب وآمن أو نص غير فارغ. يدعم Laravel اسم الغرفة أيضًا. يوحّد Node العضوية وحالة الإشراف باستخدام معرف قاعدة البيانات المعاد من Laravel.
+
+يمكن إرسال كائن user القديم اختياريًا للتوافق، لكن الخادم يتجاهله. لا يعتمد الخادم على الملف الشخصي أو الهوية أو الدور المرسل من العميل. يلزم JWT صالح للسوكيت للانضمام.
+
+## تدفق التحقق
+
+1. يأخذ Node معرف المستخدم من claim sub في JWT الموثق.
+2. يستدعي Node Laravel عبر POST /api/internal/socket/v1/rooms/{roomId}/authorize-join ويرسل userId وconnectionId الحالي.
+3. يتحقق Laravel من الغرفة وحق المستخدم في الانضمام والحظر والدور الثابت وكتم المايك وقفل الرسائل.
+4. يدخل Node المستخدم إلى غرفة Socket.IO فقط إذا أعاد Laravel allowed=true ومعرف مستخدم مطابقًا للتوكن.
 
 ## المخرجات عند النجاح
 
-- الغرفة تستقبل userList: عنصر لكل اتصال منضم. يضيف الخادم socketId، ويمرر بقية الحقول التي أرسلها العميل عدا role وisModerator وpermissions التي يحذفها.
-- الغرفة تستقبل micUpdate: حالة المقاعد أو {}.
-- الاتصال المنضم يستقبل roleUpdated { roomId, userId, role }.
-- الاتصال المنضم يستقبل messageLockUpdated { roomId, locked, normalUsersOnly }.
-- إذا كان المستخدم مكتومًا يستقبل أيضًا micMuted { roomId, userId }.
+- تستقبل الغرفة userList وفيه ملف المستخدم الموثوق من Laravel مع socketId.
+- تستقبل الغرفة micUpdate بحالة المقاعد الحالية أو {}.
+- يستقبل الاتصال roleUpdated { roomId, userId, role } حيث يمكن أن تكون role: owner أو fixed أو temporary أو root أو normal.
+- يستقبل الاتصال messageLockUpdated { roomId, locked, normalUsersOnly }.
+- يستقبل المستخدم المكتوم أيضًا micMuted { roomId, userId }.
 
-لا يوجد acknowledgement لهذا الحدث.
+لا يوجد acknowledgement callback. اعتبر ظهور المستخدم الحالي في userList إشارة النجاح العملية.
 
 ## الرفض
 
-يرسل joinRoomRejected { code, message }:
-- INVALID_ROOM_ID: roomId مفقود أو فارغ أو ليس نصًا.
-- INVALID_USER: user مفقود أو ليس كائنًا أو كان مصفوفة.
-- INVALID_USER_ID: userId مفقود أو غير صالح ولا توجد هوية JWT.
-- USER_BANNED: يوجد حظر داخل الذاكرة لمعرف الغرفة والمستخدم الفعلي.
+يتضمن joinRoomRejected الحقول roomId وuserId وcode وmessage. تشمل الأكواد:
+- INVALID_ROOM_ID: roomId ليس نصًا غير فارغ ولا عددًا صحيحًا موجبًا وآمنًا.
+- AUTHENTICATION_REQUIRED: لم يحتو handshake على JWT صالح للسوكيت.
+- USER_BANNED أو ROOM_NOT_FOUND أو ROOM_INACTIVE أو USER_NOT_FOUND أو JOIN_NOT_ALLOWED: رفض Laravel الانضمام.
+- LARAVEL_TIMEOUT أو LARAVEL_UNAVAILABLE أو SOCKET_CONFIGURATION_MISSING: تعذر على Node إكمال طلب التحقق الداخلي من Laravel.
+- INVALID_LARAVEL_RESPONSE أو INVALID_LARAVEL_IDENTITY: أعاد Laravel قرارًا غير صالح أو معرف مستخدم لا يطابق sub.
+
+إذا رُفض الانضمام إلى غرفة جديدة، يبقى الاتصال في غرفته السابقة. عند نجاح إعادة الانضمام، يغادر الغرفة السابقة بعد موافقة Laravel على الجديدة.
 
 ## ملاحظات
 
-JWT يتقدم على userId المرسل من العميل. دونه، يمكن للعميل تزوير الهوية. الخادم لا يستشير Laravel للتحقق من الغرفة أو ملكيتها أو عضويتها أو خصوصيتها. إذا أعاد socket الانضمام، يغادر غرفته السابقة أولًا.
+Laravel هو مصدر بيانات الملف الشخصي وحالة الغرفة الدائمة. تصل المعرّفات المقبولة المختلفة للغرفة نفسها إلى غرفة Socket.IO واحدة. تكون roomId في أحداث الخادم هي معرف قاعدة البيانات كنص؛ استخدمها في أوامر الإشراف التالية. لا يستخدم الانضمام حظر الذاكرة المحلية لاتخاذ قرار السماح.
 
 ## المصدر
 
-socket/rooms/room.events.js وroom.service.js وroom.validation.js.
+socket/rooms/room.events.js وsocket/rooms/room.service.js وsocket/rooms/room.validation.js وservices/laravel.service.js.
+
+يرفض الانضمام ما دامت نتيجة أمر إشراف معلق غير مؤكدة. يعني ROOM_STATE_UNCERTAIN أن Laravel لم يعد نتيجة موثوقة للأمر؛ أعد المحاولة بعد تعافي الخدمة. يتطلب ROOM_CHANGED طلب انضمام جديدًا لأن المعرّف أصبح يشير إلى غرفة أخرى أثناء التحقق.

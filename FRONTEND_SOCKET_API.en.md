@@ -1,9 +1,11 @@
 # Frontend Socket.IO API
 
-The event contract is now documented one event per file under docs/socket-api/en/. Start with the [API index](docs/socket-api/en/index.md).
+Start with the [frontend integration guide](docs/socket-api/en/frontend-integration.md), then use the [API index](docs/socket-api/en/index.md) to open the separate specification for each event.
 
 Each page lists the exact client payload, server output events, error codes, current behavior, and source files. Connection/JWT details are in [connection](docs/socket-api/en/connection.md), and all server-emitted events are listed in [server-events](docs/socket-api/en/server-events.md).
 
 The Arabic reference is under docs/socket-api/ar/ and starts at [الفهرس العربي](docs/socket-api/ar/index.md).
 
-These references describe the active code under socket/. They exclude demo/ and call out in-memory state and current identity limitations.
+These references describe the active code under socket/ and exclude demo/. Room joins and persistent moderation actions are authorized and stored through Laravel; temporary roles and live Socket.IO state remain process-local.
+
+Voice audio uses LiveKit at livekit.63on.com; Laravel POST /api/room/join returns its token. Read the [LiveKit guide](docs/socket-api/en/livekit.md). audioData is a legacy handler unused by the current application.

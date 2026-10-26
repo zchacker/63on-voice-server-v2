@@ -6,14 +6,14 @@
 
     { "roomId": "room-123" }
 
-The actor must be in this room and hold root, fixed, or temporary role.
+The actor must be authenticated, joined to this room, and authorized by local validation and Laravel. The room owner, fixed moderators, and eligible temporary moderators may be authorized.
 
 ## Success output
 
 - Actor receives moderationResult with action unlockMessages.
 - Room receives messageLockUpdated { roomId, locked: false, changedBy, normalUsersOnly: false }.
 
-All room members may send messages afterward. Calling unlockMessages on an already unlocked room also succeeds. State is in memory and lost on process restart.
+All room members may send messages after the confirmed state change. Node sends unlock_messages to Laravel first and updates its local mirror and broadcasts only after Laravel confirms. Laravel persists the lock state.
 
 ## Source
 

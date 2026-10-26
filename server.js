@@ -1,3 +1,13 @@
+const path = require('path');
+
+if (typeof process.loadEnvFile === 'function') {
+    try {
+        process.loadEnvFile(path.join(__dirname, '.env'));
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+}
+
 const http = require('http');
 const { Server } = require('socket.io');
 
@@ -12,10 +22,10 @@ const io = new Server(server, {
     }
 });
 
-socketEvents(io);// resgiter all socket events
+socketEvents(io);
 
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
-    console.log(`Socket server running on port ${PORT}`);
+    console.log('Socket server running on port ' + PORT);
 });

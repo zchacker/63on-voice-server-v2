@@ -6,7 +6,7 @@
 
     { "roomId": "room-123" }
 
-The actor must be in this room and hold root, fixed, or temporary role.
+The actor must be authenticated, joined to this room, and authorized by local validation and Laravel. The room owner, fixed moderators, and eligible temporary moderators may be authorized.
 
 ## Success output
 
@@ -17,7 +17,7 @@ Normal users are blocked by sendMessage with messageRejected code MESSAGES_LOCKE
 
 ## Behavior
 
-Calling lockMessages for an already locked room succeeds. Lock state is in memory and lost on process restart.
+Node sends lock_messages to Laravel first. The lock is persisted there; Node updates its local mirror and broadcasts messageLockUpdated only after Laravel confirms the locked state. A timeout or rejection returns success=false.
 
 ## Source
 

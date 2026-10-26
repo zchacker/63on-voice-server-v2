@@ -2,8 +2,11 @@
 
 يوثق هذا المجلد عقد Socket.IO الفعلي اعتمادًا على ملفات الأحداث وخدماتها داخل socket/. لا يشمل مجلد demo. لكل حدث يرسله العميل صفحة مستقلة.
 
+- الصوت: [دليل LiveKit](livekit.md) — livekit.63on.com، وتوكنه من Laravel POST /api/room/join. الحدث audioData قديم ولا يستخدمه التطبيق.
+
 ## الاتصال والقواعد العامة
 
+- ابدأ من [دليل ربط الواجهة](frontend-integration.md) لمعرفة تدفق الاتصال والغرفة كاملًا.
 - راجع connection.md لعنوان الاتصال وبيانات handshake والمصادقة والهوية.
 - الخادم يستخدم Socket.IO وليس WebSocket خامًا. المنفذ PORT أو 3000 افتراضيًا.
 - لا يستخدم الخادم acknowledgements أو callbacks؛ راجع صفحة الحدث لمعرفة أحداث الرد والأخطاء.
@@ -18,7 +21,6 @@
 - users/disconnect.md
 - rooms/requestMic.md
 - rooms/leaveMic.md
-- rooms/audioData.md
 
 ## الرسائل والهدايا
 
@@ -33,6 +35,7 @@
 - moderation/removeUser.md
 - moderation/promoteTemporaryModerator.md
 - moderation/promoteFixedModerator.md
+- moderation/demoteFixedModerator.md
 - moderation/muteMic.md
 - moderation/unmuteMic.md
 - moderation/lockMessages.md
@@ -40,7 +43,11 @@
 
 ## قيود التنفيذ الحالية
 
-- لا يوجد تحقق من عضوية الغرفة أو ملكيتها عبر Laravel أو قاعدة بيانات.
-- الحالات في ذاكرة عملية Node.js فقط؛ تضيع الحظورات والأدوار الثابتة وكتم المايك وقفل الرسائل عند إعادة التشغيل.
-- JWT اختياري للانضمام. جلسة بلا JWT يمكنها دخول الغرفة بمعرف userId يرسله العميل؛ هذه الهوية غير موثوقة لأغراض الإشراف.
+- يتحقق Laravel من كل انضمام للغرفة ويحفظ الحظر والأدوار الثابتة وكتم المايك وقفل الرسائل.
+- يلزم JWT للانضمام؛ قد يفتح الاتصال بدونه لكن joinRoom يرفضه.
+- الأدوار المؤقتة وحالة الاتصال الحي محلية لكل عملية Node؛ لا تتشارك العمليات المتعددة البث الحي.
 - الهدايا بث بيانات فقط، بلا تحقق من الدفع أو الرصيد.
+
+## أحداث قديمة باقية في المصدر
+
+- [audioData](rooms/audioData.md): غير مستخدم في تدفق الصوت عبر LiveKit.

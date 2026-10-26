@@ -6,7 +6,7 @@
 
     { "roomId": "room-123", "targetUserId": "user-42", "reason": "Disruption" }
 
-reason is optional and limited to 300 characters in the kicked notification.
+reason is optional and is truncated to 1000 characters in the kicked notification.
 
 ## Success outputs
 
@@ -24,3 +24,7 @@ Actor must be an authorized moderator joined to the specified room. Authorizatio
 ## Source
 
 socket/moderation/moderation.events.js; socket/moderation/moderation.service.js; moderation.validation.js.
+
+## LiveKit media
+
+Handle microphone and participant changes through the LiveKit SDK as described in [LiveKit integration](../livekit.md). Socket.IO state changes do not directly change LiveKit server permissions or disconnect its participants.

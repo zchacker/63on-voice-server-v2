@@ -15,7 +15,7 @@
 
 ## الفشل
 
-إذا لم يوجد حظر في الذاكرة، يعيد moderationResult مع success=false وcode=USER_NOT_BANNED. بقية أخطاء الصلاحيات والحقول في moderation/common.md.
+يحدد Laravel هل يوجد حظر فعال. لا يمسح Node نسخته المحلية ولا يبث userUnbanned إلا بعد نجاح Laravel. تعاد أخطاء الخادم، ومنها USER_NOT_BANNED، داخل moderationResult.
 
 إلغاء الحظر لا يعيد socket المطرود تلقائيًا؛ على المستخدم إرسال joinRoom مجددًا.
 

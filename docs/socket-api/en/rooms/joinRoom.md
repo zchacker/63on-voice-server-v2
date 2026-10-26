@@ -4,39 +4,46 @@
 
 ## Input
 
-    {
-      "roomId": "room-123",
-      "user": {
-        "userId": "user-42",
-        "name": "Sara",
-        "avatar": "https://example.com/sara.png"
-      }
-    }
+    { "roomId": "room-123" }
 
-roomId must be a non-empty string. user must be a plain object. Without a valid JWT, user.userId must be a non-empty string. If the connection has a valid JWT, JWT sub replaces the supplied userId; userId may be omitted in that case. The server removes role, isModerator, and permissions from the user object.
+roomId may be the database ID as a positive safe integer or a non-empty string. Laravel also supports room usernames. Node uses the canonical database ID returned by Laravel for all membership and moderation state.
+
+The optional legacy user object is accepted but ignored. The server never trusts profile, identity, or role fields from the client. A valid Socket JWT is required to join.
+
+## Server flow
+
+1. Node takes the user ID from the verified JWT sub claim.
+2. Node calls Laravel POST /api/internal/socket/v1/rooms/{roomId}/authorize-join with userId and the current Socket.IO connectionId.
+3. Laravel checks the room, the user's membership/access, bans, persistent role, microphone mute, and message-lock state.
+4. Node joins the Socket.IO room only when Laravel returns allowed=true and a matching user ID.
 
 ## Success outputs
 
-- Room receives userList: one entry per connected socket. Server adds socketId to this user's object; other client-supplied fields pass through except role, isModerator, and permissions, which are removed.
-- Room receives micUpdate: current spot-number-to-user object, or {}.
-- Joining socket receives roleUpdated { roomId, userId, role }.
+- Room receives userList containing Laravel's trusted user profile plus socketId.
+- Room receives micUpdate with the current spot-number-to-user object, or {}.
+- Joining socket receives roleUpdated { roomId, userId, role } where role is owner, fixed, temporary, root, or normal.
 - Joining socket receives messageLockUpdated { roomId, locked, normalUsersOnly }.
-- If this identity is muted, joining socket also receives micMuted { roomId, userId }.
+- A muted user also receives micMuted { roomId, userId }.
 
-This event has no acknowledgement callback.
+This event has no acknowledgement callback. Treat the joining user appearing in userList as the practical success signal.
 
 ## Rejections
 
-joinRoomRejected { code, message }:
-- INVALID_ROOM_ID: roomId missing, empty, or not a string.
-- INVALID_USER: user missing, not an object, or an array.
-- INVALID_USER_ID: userId missing/invalid and no JWT identity is available.
-- USER_BANNED: current in-memory ban exists for roomId and effective userId.
+joinRoomRejected includes roomId, userId, code, and message. Codes include:
+- INVALID_ROOM_ID: roomId is neither a non-empty string nor a positive safe integer.
+- AUTHENTICATION_REQUIRED: the handshake did not contain a valid Socket JWT.
+- USER_BANNED, ROOM_NOT_FOUND, ROOM_INACTIVE, USER_NOT_FOUND, JOIN_NOT_ALLOWED: Laravel denied the join.
+- LARAVEL_TIMEOUT, LARAVEL_UNAVAILABLE, SOCKET_CONFIGURATION_MISSING: Node could not complete the internal Laravel authorization call.
+- INVALID_LARAVEL_RESPONSE or INVALID_LARAVEL_IDENTITY: Laravel returned a malformed decision or a user ID that did not match JWT sub.
+
+If a request to join a new room is denied, the socket stays in its previously joined room. A successful rejoin leaves the previous room after Laravel authorizes the new room.
 
 ## Behavior notes
 
-A JWT identity takes precedence over client-supplied userId. Without JWT, identity is client-controlled. The server does not consult Laravel to verify room existence, ownership, membership, or private-room access. Rejoining the same socket first leaves its previous room.
+Laravel is the source of truth for user profile and persistent room state. Different accepted identifiers for the same room resolve to one Socket.IO room. Server event roomId values are the canonical ID as a string; use that ID for subsequent moderation commands. The in-memory ban check is not used to authorize joins.
 
 ## Source
 
-socket/rooms/room.events.js; socket/rooms/room.service.js; socket/rooms/room.validation.js.
+socket/rooms/room.events.js; socket/rooms/room.service.js; socket/rooms/room.validation.js; services/laravel.service.js.
+
+If a pending moderation outcome cannot yet be reconciled, the join is rejected. ROOM_STATE_UNCERTAIN means Laravel returned no trustworthy command result; retry only after service recovery. ROOM_CHANGED requires a fresh join because the identifier resolved to another room during authorization.

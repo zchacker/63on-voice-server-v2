@@ -6,7 +6,7 @@
 
     { "roomId": "room-123", "targetUserId": "user-42", "reason": "Disruption" }
 
-reason اختياري ويقص إلى 300 حرف في إشعار kicked.
+reason اختياري ويقص إلى 1000 حرف في إشعار kicked.
 
 ## مخرجات النجاح
 
@@ -24,3 +24,7 @@ reason اختياري ويقص إلى 300 حرف في إشعار kicked.
 ## المصدر
 
 socket/moderation/moderation.events.js وmoderation.service.js وmoderation.validation.js.
+
+## الصوت عبر LiveKit
+
+نفذوا تغيرات المايك ومغادرة المشاركين عبر LiveKit SDK كما يوضح [دليل LiveKit](../livekit.md). لا تغير أوامر Socket.IO صلاحيات LiveKit ولا تفصل مشاركيه مباشرة من الخادم.
