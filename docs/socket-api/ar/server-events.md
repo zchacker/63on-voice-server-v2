@@ -32,7 +32,7 @@
 | moderationResult | المشرف الذي أرسل الطلب | { action, success, code, message, roomId, targetUserId?, role?, state?, requestId, occurredAt }. إذا لم يرسل العميل UUID ينشئ Node قيمة requestId. |
 
 أخطاء الاتصال يرسلها Socket.IO نفسه كحدث client-side اسمه connect_error، وليست أحداثًا يطلقها handler في التطبيق.
-لا توجد أحداث تطبيق باسم userJoined أو userLeft.
+لا توجد أحداث تطبيق باسم userJoined أو userLeft أو room-count. إشعارات Node عن الدخول والخروج استدعاءات HTTP داخلية إلى Laravel وليست أحداث Socket.IO.
 
 ## المصدر
 

@@ -17,6 +17,7 @@ The optional legacy user object is accepted but ignored. The server never trusts
 3. Laravel checks the room, the user's membership/access, bans, persistent role, microphone mute, and message-lock state.
 4. The trusted room object includes `liveKitRoomName`, equal to the Laravel `rooms.username`; Socket keeps this server-only value for LiveKit moderation.
 5. Node joins the Socket.IO room only when Laravel returns allowed=true and a matching user ID.
+6. After local membership is established, Node asynchronously posts an internal `joined` presence notification to Laravel so Laravel can refresh `rooms.online_count`. This is not a client-facing Socket event; notification failures are logged and do not undo a successful join. See [the Laravel presence contract](../../../../LARAVEL_ROOM_PRESENCE_REQUEST.md).
 
 ## Success outputs
 

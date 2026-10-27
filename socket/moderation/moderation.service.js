@@ -104,6 +104,12 @@ function removeTargetFromRoom(io, roomId, targetUserId, notify, reason) {
         target.liveKitRoomName = null;
         target.user = null;
         roomState.removeRoomUser(roomId, target.id);
+        laravel.notifyRoomPresence(roomId, {
+            event: 'left',
+            userId: targetUserId,
+            connectionId: target.id,
+            eventVersion: roomState.nextPresenceEventVersion(target)
+        });
         // Notify only after the Socket membership and local user entry are cleared.
         target.emit(notify, { roomId, userId: targetUserId, reason: reason || null });
     }

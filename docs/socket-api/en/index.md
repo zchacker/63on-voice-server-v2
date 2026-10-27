@@ -46,7 +46,7 @@ This folder documents the active Socket.IO contract directly from the event hand
 
 - Laravel authorizes each room join and persists bans, fixed roles, mic mutes, and message locks.
 - JWT is required to join. A connection may open without one, but joinRoom rejects it.
-- Temporary roles and live socket state are process-local; multiple Node workers do not share live broadcasts.
+- Laravel stores the room-list `online_count`; Node sends internal joined/left notifications to Laravel. There is no Socket.IO room-count event. Other live state, including mic spots and temporary roles, remains process-local.
 - Gifts are broadcast only; no payment or balance validation is implemented.
 
 ## Legacy events retained in source

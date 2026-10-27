@@ -96,6 +96,12 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
         socket.liveKitRoomName = authorization.room.liveKitRoomName;
         socket.user = user;
         state.addRoomUser(roomId, socket.id, user);
+        laravel.notifyRoomPresence(roomId, {
+            event: 'joined',
+            userId,
+            connectionId: socket.id,
+            eventVersion: state.nextPresenceEventVersion(socket)
+        });
         io.to(roomId).emit('userList', state.getRoomUsers(roomId));
         io.to(roomId).emit('micUpdate', { ...(state.getMicSpots(roomId) || {}) });
         moderation.handleJoin(socket, roomId);
@@ -180,6 +186,12 @@ function leaveCurrentRoom(io, socket) {
     io.to(roomId).emit('userList', state.getRoomUsers(roomId));
     if (micChanged) io.to(roomId).emit('micUpdate', { ...(state.getMicSpots(roomId) || {}) });
     state.clearRoomState(roomId);
+    laravel.notifyRoomPresence(roomId, {
+        event: 'left',
+        userId,
+        connectionId: socket.id,
+        eventVersion: state.nextPresenceEventVersion(socket)
+    });
 }
 
 function broadcastRoomUpdated(io, roomId, fields) {

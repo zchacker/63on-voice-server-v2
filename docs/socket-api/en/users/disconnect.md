@@ -7,6 +7,7 @@ Socket.IO emits disconnect when the connection closes. The handler invokes the s
 - Clears microphone spots owned by that user.
 - Broadcasts userList and, if needed, micUpdate.
 - Removes the temporary moderator role after the last socket for that user leaves.
+- Posts an internal `left` presence notification to Laravel so it can update the database count.
 
 There is no payload contract or acknowledgement. This is a lifecycle notification, not a client API request.
 

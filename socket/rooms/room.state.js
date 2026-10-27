@@ -25,6 +25,11 @@ async function runRoomOperation(roomId, operation) {
 function getOperationVersion() { return operationVersion; }
 function getRoomVersion(roomId) { return roomVersions.get(roomId) || 0; }
 
+function nextPresenceEventVersion(socket) {
+    socket.roomPresenceEventVersion = (socket.roomPresenceEventVersion || 0) + 1;
+    return socket.roomPresenceEventVersion;
+}
+
 function getRoom(roomId) {
     return liveRooms.get(roomId);
 }
@@ -76,6 +81,7 @@ module.exports = {
     runRoomOperation,
     getOperationVersion,
     getRoomVersion,
+    nextPresenceEventVersion,
     liveRooms,
     micSpots,
     getRoom,

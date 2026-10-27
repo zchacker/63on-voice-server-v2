@@ -14,19 +14,23 @@ const state = require('../socket/moderation/moderation.state');
 const { verifyToken } = require('../socket/auth/socket.auth');
 
 const originalAuthorize = laravel.authorizeRoomJoin;
+const originalNotifyRoomPresence = laravel.notifyRoomPresence;
 const originalSave = laravel.saveModerationCommand;
 const originalStartAudit = laravel.startModerationAudit;
 const originalCompleteAudit = laravel.completeModerationAudit;
 const originalRemoveLiveKitParticipant = livekit.removeActiveParticipant;
 const originalFetch = global.fetch;
 const environment = { ...process.env };
+
 test.beforeEach(() => {
+    laravel.notifyRoomPresence = async () => true;
     laravel.startModerationAudit = async (event) => ({ requestId: event.requestId, status: 'started' });
     laravel.completeModerationAudit = async (event) => ({ requestId: event.requestId, status: 'completed' });
     livekit.removeActiveParticipant = async () => ({ removed: false });
 });
 test.afterEach(() => {
     laravel.authorizeRoomJoin = originalAuthorize;
+    laravel.notifyRoomPresence = originalNotifyRoomPresence;
     laravel.saveModerationCommand = originalSave;
     laravel.startModerationAudit = originalStartAudit;
     laravel.completeModerationAudit = originalCompleteAudit;

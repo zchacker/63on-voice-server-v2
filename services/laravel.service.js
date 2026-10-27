@@ -1,6 +1,7 @@
 const API_PREFIX = '/api/internal/socket/v1';
 const DEFAULT_TIMEOUT_MS = 5000;
 const MIN_SECRET_LENGTH = 32;
+const PRESENCE_EVENTS = new Set(['joined', 'left']);
 
 class LaravelServiceError extends Error {
     constructor(code, message, status) {
@@ -178,6 +179,61 @@ async function authorizeRoomJoin(roomId, userId, connectionId) {
     );
 }
 
+async function notifyRoomPresence(roomId, event) {
+    if (!roomId || !PRESENCE_EVENTS.has(event?.event)
+        || typeof event.userId !== 'string' || !event.userId
+        || typeof event.connectionId !== 'string' || !event.connectionId
+        || !Number.isSafeInteger(event.eventVersion) || event.eventVersion < 1) {
+        console.error('Laravel room presence notification was skipped because its payload was invalid.');
+        return false;
+    }
+
+    const payload = {
+        event: event.event,
+        userId: event.userId,
+        connectionId: event.connectionId,
+        eventVersion: event.eventVersion
+    };
+    const path = '/rooms/' + encodeURIComponent(roomId) + '/presence';
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const response = await postInternal(path, payload);
+            const responseMatchesRequest = response.success === true
+                && String(response.roomId) === String(roomId)
+                && String(response.userId) === event.userId
+                && response.connectionId === event.connectionId
+                && response.event === event.event
+                && response.eventVersion === event.eventVersion
+                && typeof response.applied === 'boolean'
+                && Number.isSafeInteger(response.onlineCount)
+                && response.onlineCount >= 0;
+            if (!responseMatchesRequest) {
+                throw new LaravelServiceError(
+                    'INVALID_LARAVEL_RESPONSE',
+                    'Laravel did not confirm the requested room presence event.',
+                    502
+                );
+            }
+            return true;
+        } catch (error) {
+            const retryable = ['LARAVEL_TIMEOUT', 'LARAVEL_UNAVAILABLE'].includes(error.code)
+                || error.status >= 500;
+            if (!retryable || attempt === 2) {
+                console.error('Laravel room presence notification failed.', {
+                    roomId: String(roomId),
+                    event: event.event,
+                    eventVersion: event.eventVersion,
+                    code: error.code || 'LARAVEL_UNAVAILABLE'
+                });
+                return false;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+        }
+    }
+    return false;
+}
+
 async function saveModerationCommand(roomId, command) {
     const encodedRoomId = encodeURIComponent(roomId);
     const path = '/rooms/' + encodedRoomId + '/moderation/commands';
@@ -297,6 +353,7 @@ function getPublicError(error) {
 
 module.exports = {
     authorizeRoomJoin,
+    notifyRoomPresence,
     saveModerationCommand,
     startModerationAudit,
     completeModerationAudit,
