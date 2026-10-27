@@ -1,36 +1,35 @@
-const express = require('express');
+const path = require('path');
+
+if (typeof process.loadEnvFile === 'function') {
+    try {
+        process.loadEnvFile(path.join(__dirname, '.env'));
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+}
+
 const http = require('http');
-const socketIo = require('socket.io');
+const express = require('express');
+const { Server } = require('socket.io');
+
+const socketEvents = require('./socket');
+const { registerInternalHttpRoutes } = require('./services/internal-http.service');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server);
 
-const PORT = 3000;
-
-app.use(express.static('public'));
-
-app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/index.html');
+const io = new Server(server, {
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST']
+    }
 });
 
-io.on('connection', (socket) => {
-  console.log('New client connected', socket.id);
+socketEvents(io);
+registerInternalHttpRoutes(app, io);
 
-  socket.on('join-room', (roomId) => {
-    socket.join(roomId);
-    socket.to(roomId).emit('user-connected', socket.id);    
-
-    socket.on('disconnect', () => {
-      socket.to(roomId).emit('user-disconnected', socket.id);
-    });
-
-    socket.on('signal', (data) => {
-      io.to(data.to).emit('signal', data);
-    });
-  });
-});
+const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+    console.log('Socket server running on port ' + PORT);
 });

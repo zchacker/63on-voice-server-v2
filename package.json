@@ -2,7 +2,15 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "livekit-server-sdk": "^2.19.2",
     "mediasoup": "^3.14.7",
     "socket.io": "^4.7.5"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
   }
 }
