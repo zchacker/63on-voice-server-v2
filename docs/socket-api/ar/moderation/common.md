@@ -48,11 +48,11 @@
 
 ترسل الأوامر banUser وunbanUser وpromoteFixedModerator وdemoteFixedModerator وmuteMic وunmuteMic وlockMessages وunlockMessages إلى Laravel قبل تغيير ذاكرة Node أو بث النجاح. Laravel هو مصدر الحقيقة الدائم للحظر؛ لا يحتفظ Node بقائمة حظر مستقلة. تؤخذ `state.banned` من رد Laravel. تحافظ userBanned وuserUnbanned على الحمولة `{ roomId, userId }`، ولا تبثان إلا بعد تأكيد حفظ Laravel.
 
-يسجل مسار أوامر Laravel الحالي العمليات الدائمة الناجحة ورفض الأعمال/الصلاحيات الذي يصل إليه. يستخدم Socket هذا المسار إذا لم ينشر Laravel واجهة سجل التدقيق المنفصلة. الرفض المحلي في Node لا يظهر حاليًا في سجل Laravel.
+يسجل مسار أوامر Laravel العمليات الدائمة الناجحة ورفض الأعمال/الصلاحيات. ويرسل Socket كذلك كل محاولة إلى واجهة التدقيق المنفصلة ذات المرحلتين؛ فتسجل الرفض المحلي وتحفظ النتيجة النهائية باستخدام `requestId` نفسه.
 
-يعمل promoteTemporaryModerator وremoveUser على الاتصال الحي فقط، ولا يحولان الطرد إلى حظر أو الترقية إلى رتبة دائمة. لا تملك واجهات Laravel الحالية مسارًا لتسجيل هذين الإجراءين، لذلك يرفضهما Socket حتى تتوفر آلية تدقيق خادمية. يحذف دور temporary عند مغادرة آخر اتصال نشط للمستخدم. يستدعي Node Laravel عند كل انضمام لاستعادة الدور الثابت وأهلية الحظر وكتم المايك وقفل الرسائل.
+يعمل promoteTemporaryModerator وremoveUser على الاتصال الحي فقط، ولا يحولان الطرد إلى حظر أو الترقية إلى رتبة دائمة. تظهر محاولاتهما الآن في سجل الإشراف في Laravel. يحذف دور temporary عند مغادرة آخر اتصال نشط للمستخدم. يستدعي Node Laravel عند كل انضمام لاستعادة الدور الثابت وأهلية الحظر وكتم المايك وقفل الرسائل.
 
-يحذف banUser وremoveUser المشارك النشط من LiveKit عبر واجهة الخادم قبل إرسال kicked للهدف. يجب أن يتضمن رد Laravel `room.liveKitRoomName` الموثوق (وهو `rooms.username`)؛ الرد الحالي لا يتضمنه، لذلك يرفض Node التحقق من الانضمام حتى يضيف Laravel هذا الحقل. أصبح Laravel يرفض إصدار توكن LiveKit من `POST /api/room/join` عند وجود حظر فعال، مع الرمز `USER_BANNED`.
+يحذف banUser وremoveUser المشارك النشط من LiveKit عبر واجهة الخادم قبل إرسال kicked للهدف. تتضمن استجابة تفويض Laravel الحقل الموثوق `room.liveKitRoomName` بقيمة `rooms.username`. يرفض Laravel إصدار توكن LiveKit من `POST /api/room/join` عند وجود حظر فعال، مع الرمز `USER_BANNED`.
 
 تحتوي حالة الأمر المحفوظ الناجح على القيم الحالية banned وrole وmicMuted وmessagesLocked. استخدموا هذه اللقطة لتحديث عناصر التحكم في الواجهة.
 

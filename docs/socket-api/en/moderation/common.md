@@ -47,11 +47,11 @@ Only the owner can promote or demote a fixed moderator. Owners, fixed moderators
 
 banUser, unbanUser, promoteFixedModerator, demoteFixedModerator, muteMic, unmuteMic, lockMessages, and unlockMessages are sent to Laravel before Node changes its local mirror or broadcasts success. Laravel is the durable source of truth for banned state; Node keeps no independent ban list. `state.banned` is taken from Laravel's command response. Existing `userBanned` and `userUnbanned` events keep `{ roomId, userId }` and are emitted only after Laravel confirms the saved action.
 
-Laravel's current moderation command route records successful durable actions and valid authorization/business rejections. Socket uses that route when Laravel has not deployed the separate audit-events API. Locally rejected attempts are not recorded by the current Laravel API.
+Laravel's moderation command route records successful durable actions and authorization/business rejections. Socket also sends every attempt to Laravel's separate two-phase audit-events API; this records local rejections and preserves the final result with the same requestId.
 
-promoteTemporaryModerator and removeUser are live Socket operations, not persistent role or ban changes. Laravel's current API has no audit route for these operations, so Socket fails them closed until a server-side audit contract is deployed. A temporary role is removed when the user's final active socket leaves the room. Laravel is queried on each join to restore persistent role, ban eligibility, mic mute, and message lock state.
+promoteTemporaryModerator and removeUser are live Socket operations, not persistent role or ban changes. Their attempts are now visible in Laravel's moderation-events history. A temporary role is removed when the user's final active socket leaves the room. Laravel is queried on each join to restore persistent role, ban eligibility, mic mute, and message lock state.
 
-banUser and removeUser also remove an active participant through the LiveKit server API before the target is notified with `kicked`. The Laravel join authorization response must include the trusted `room.liveKitRoomName` (`rooms.username`); the current response does not, so the current Node validation rejects it until that field is added. Laravel's `POST /api/room/join` now rejects an active room ban with `USER_BANNED` before issuing a LiveKit token.
+banUser and removeUser also remove an active participant through the LiveKit server API before the target is notified with `kicked`. Laravel's join authorization response includes the trusted `room.liveKitRoomName` (`rooms.username`). Laravel's `POST /api/room/join` rejects an active room ban with `USER_BANNED` before issuing a LiveKit token.
 
 The state response for a successful saved command contains the current fields banned, role, micMuted, and messagesLocked. Clients should use this snapshot to refresh controls.
 
