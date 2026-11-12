@@ -4,6 +4,8 @@ The server emits these events. Payloads below reflect current code.
 
 | Event | Recipient | Payload / behavior |
 | --- | --- | --- |
+| socketSessionRefreshed | Requesting socket | { userId, expiresAt, expiresIn }; timestamps and durations are in seconds. Active connection and room state continue. |
+| socketSessionRefreshRejected | Requesting socket | { code, message }; the previously accepted expiry remains in effect. See [refresh errors](auth/refreshSocketSession.md). |
 | userList | Room | One entry per connected socket, including Laravel's trusted userId, name, avatar, and socketId. Client-supplied profile fields are ignored. |
 | micUpdate | Room | Object keyed by mic spot number; values are assigned user objects. Empty object means no occupied spots. |
 | roleUpdated | Joining/promoted user | { roomId, userId, role }; role is owner, root, fixed, temporary, or normal. |

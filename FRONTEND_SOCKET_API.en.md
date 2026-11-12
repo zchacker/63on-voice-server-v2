@@ -1,5 +1,7 @@
 # Frontend Socket.IO API
 
+Renew active sessions before JWT expiry using [refreshSocketSession](docs/socket-api/en/auth/refreshSocketSession.md). The contract includes Laravel token retrieval, success and failure events, timing, and reconnect recovery.
+
 Start with the [frontend integration guide](docs/socket-api/en/frontend-integration.md), then use the [API index](docs/socket-api/en/index.md) to open the separate specification for each event.
 
 Each page lists the exact client payload, server output events, error codes, current behavior, and source files. Connection/JWT details are in [connection](docs/socket-api/en/connection.md), and all server-emitted events are listed in [server-events](docs/socket-api/en/server-events.md).

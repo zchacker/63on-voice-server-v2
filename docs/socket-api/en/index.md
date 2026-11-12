@@ -14,6 +14,10 @@ This folder documents the active Socket.IO contract directly from the event hand
 - See server-events.md for complete output event payloads.
 - Each event page cites its implementation source.
 
+## Session renewal
+
+- [refreshSocketSession](auth/refreshSocketSession.md) renews the current connection before token expiry.
+
 ## Room and user events
 
 - rooms/joinRoom.md

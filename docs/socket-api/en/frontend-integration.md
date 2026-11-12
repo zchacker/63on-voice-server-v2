@@ -79,13 +79,14 @@ Socket.IO creates a new server-side socket after a connection is lost. The serve
 
 A disconnect also runs server cleanup. It clears the user's mic spots and can remove a temporary moderator role after the last socket disconnects. Therefore, after reconnect the frontend must use the newly received roleUpdated value; do not assume a temporary role survived.
 
-If refreshing a token, update socket.auth before reconnecting:
+For scheduled token renewal on a connected socket, request a fresh token from Laravel and send it on the current connection:
 
     socket.auth = { token: refreshedSocketJwt };
-    socket.disconnect();
-    socket.connect();
+    socket.emit("refreshSocketSession", { token: refreshedSocketJwt });
 
-The disconnect/connect sequence creates a fresh handshake and triggers the connect handler to rejoin the room. The server disconnects the socket at token expiry and blocks events after expiry. Refresh the token before exp, then reconnect with the new token.
+Wait for `socketSessionRefreshed { userId, expiresAt, expiresIn }`, then schedule the next renewal about 60 seconds before expiry. Initial scheduling uses Laravel's `expires_in`. A successful renewal keeps the current room, microphone seat, and temporary role. Handle `socketSessionRefreshRejected { code, message }` and retry before the currently accepted token expires. See the [complete refresh contract and HTTP example](auth/refreshSocketSession.md).
+
+If the current token expires or the transport disconnects, obtain a fresh token, set `socket.auth`, and reconnect. The `connect` handler must rejoin the room after that actual reconnection.
 
 ## 5. Room lifecycle
 

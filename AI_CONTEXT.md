@@ -1,6 +1,6 @@
 # AI project context
 
-Verified: 2026-10-27. Project root: /Users/hiramdiazdiaz/Documents/63on-voice-server-v2.
+Verified: 2026-11-12. Project root: /Users/hiramdiazdiaz/Documents/63on-voice-server-v2.
 Read this file before inspecting source. Search symbols and open only files related to the task. Do not scan node_modules.
 
 ## Owner-defined module architecture
@@ -19,6 +19,7 @@ demo/ is legacy reference only. services/laravel.service.js is the internal Lara
 
 ## Module map
 - socket/auth/socket.auth.js: verifies HS256 JWT handshake.auth.token, including sub, exp, iss, aud, and optional nbf.
+- socket/auth/auth.events.js, auth.service.js, auth.validation.js, auth.state.js: refreshSocketSession accepts a newer valid JWT for the same active user, replaces the expiry timer, and preserves room/mic/temporary-role state. Emits socketSessionRefreshed {userId, expiresAt, expiresIn} or socketSessionRefreshRejected {code, message}. Packet checks read the latest authenticatedClaims. Frontend requests a Laravel token about 60 seconds before expiry, updates socket.auth for future handshakes, and sends the refresh event on the active connection. Expired sessions still disconnect and require a fresh handshake and join.
 - socket/rooms/: join authorization with Laravel, room membership and microphone seat allocation. Voice media is handled separately by LiveKit.
 - socket/rooms/room.state.js: liveRooms maps roomId -> Map(socketId,user); micSpots maps roomId -> spot-number object. These remain process-local.
 - socket/users/: explicit leaveRoom and disconnect cleanup.

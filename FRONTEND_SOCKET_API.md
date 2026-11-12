@@ -1,5 +1,7 @@
 # مرجع Socket.IO للواجهة الأمامية
 
+جددوا الجلسة قبل انتهاء JWT باستخدام [refreshSocketSession](docs/socket-api/ar/auth/refreshSocketSession.md). يوضح العقد طلب التوكن من Laravel وردود النجاح والفشل وتوقيت التجديد ومعالجة إعادة الاتصال.
+
 ابدأ من [دليل ربط الواجهة](docs/socket-api/ar/frontend-integration.md)، ثم استخدم [فهرس API العربي](docs/socket-api/ar/index.md) لفتح مواصفة كل حدث في ملف مستقل.
 
 توضح كل صفحة الحمولة التي يرسلها العميل، وأحداث رد الخادم، وأكواد الأخطاء، والسلوك الفعلي، وملفات المصدر. تفاصيل الاتصال وJWT في [صفحة الاتصال](docs/socket-api/ar/connection.md)، وقائمة كل أحداث الخادم في [أحداث الخادم](docs/socket-api/ar/server-events.md).
