@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const state = require('./auth.state');
 
 const DEFAULT_ISSUER = '63on-backend';
 const DEFAULT_AUDIENCE = '63on-socket';
@@ -74,16 +75,11 @@ function installSocketAuth(io) {
 
         try {
             const claims = verifyToken(token, process.env.SOCKET_JWT_SECRET);
-            socket.authenticatedUserId = claims.sub;
-            socket.authenticatedClaims = claims;
-
-            // يمنع مؤقت الانتهاء بقاء صلاحيات جلسة قديمة فعالة بعد انتهاء توكنها.
-            const expiresInMs = Math.max(1, claims.exp * 1000 - Date.now());
-            const expiryTimer = setTimeout(() => socket.disconnect(true), expiresInMs);
-            expiryTimer.unref?.();
-            socket.once('disconnect', () => clearTimeout(expiryTimer));
+            state.setSession(socket, claims);
+            socket.once('disconnect', () => state.clearExpiryTimer(socket));
             socket.use((_packet, continuePacket) => {
-                if (Date.now() < claims.exp * 1000) return continuePacket();
+                // Refresh replaces these claims, so every event uses the latest expiry.
+                if (Date.now() < socket.authenticatedClaims.exp * 1000) return continuePacket();
                 socket.disconnect(true);
             });
             next();

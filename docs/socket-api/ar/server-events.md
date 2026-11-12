@@ -4,6 +4,8 @@
 
 | الحدث | المستلم | الحمولة أو السلوك |
 | --- | --- | --- |
+| socketSessionRefreshed | الاتصال الطالب | { userId, expiresAt, expiresIn }؛ الوقت والمدة بالثواني، مع استمرار الاتصال وحالة الغرفة. |
+| socketSessionRefreshRejected | الاتصال الطالب | { code, message }؛ تبقى الصلاحية المقبولة سابقًا فعالة. راجعوا [أخطاء التجديد](auth/refreshSocketSession.md). |
 | userList | الغرفة | عنصر لكل اتصال، ويشمل userId وname وavatar الموثوقة من Laravel وsocketId. يتجاهل الخادم حقول الملف الشخصي المرسلة من العميل. |
 | micUpdate | الغرفة | كائن مفاتيحه أرقام مقاعد المايك وقيمه كائن المستخدم المحجوز. {} تعني أن كل المقاعد متاحة. |
 | roleUpdated | المستخدم المنضم أو الذي تغير دوره | { roomId, userId, role } حيث role إحدى owner أو root أو fixed أو temporary أو normal. |

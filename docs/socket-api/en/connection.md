@@ -24,6 +24,8 @@ The Socket handshake sends the returned JWT in auth.token. Node verifies:
 
 A token with an invalid signature or claims rejects the connection with connect_error beginning AUTHENTICATION_FAILED. The server disconnects the socket at exp and rejects further events after expiry. A connection without a token may open, but it cannot join any room.
 
+Renew before expiry through [refreshSocketSession](auth/refreshSocketSession.md). It accepts a valid newer JWT for the same user and replaces the current expiry timer while preserving the connection and room state. The response events are `socketSessionRefreshed { userId, expiresAt, expiresIn }` and `socketSessionRefreshRejected { code, message }`.
+
 ## Join identity and authorization
 
 The client emits joinRoom with roomId. Legacy user data may still be included for compatibility, but the server ignores it. Node takes the user ID from the verified JWT sub, then calls Laravel POST /api/internal/socket/v1/rooms/{roomId}/authorize-join using its server-only service token. A room is joined only after Laravel returns allowed=true and a user ID matching the JWT subject.

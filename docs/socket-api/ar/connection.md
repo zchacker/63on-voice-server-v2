@@ -24,6 +24,8 @@
 
 يرفض الاتصال عند توقيع أو claims غير صالحة برسالة connect_error تبدأ بـ AUTHENTICATION_FAILED. يفصل الخادم الاتصال عند exp ويرفض أي أحداث بعد انتهاء التوكن. قد يفتح الاتصال دون JWT، لكن لا يمكنه الانضمام إلى غرفة.
 
+جددوا الجلسة قبل الانتهاء عبر [refreshSocketSession](auth/refreshSocketSession.md). يقبل الحدث JWT صحيحًا بصلاحية أحدث للمستخدم نفسه ويستبدل مؤقت الانتهاء مع استمرار الاتصال وحالة الغرفة. الرد هو `socketSessionRefreshed { userId, expiresAt, expiresIn }` أو `socketSessionRefreshRejected { code, message }`.
+
 ## هوية الانضمام والتحقق من الصلاحية
 
 يرسل العميل joinRoom مع roomId. يمكن إرسال بيانات user القديمة للتوافق، لكن الخادم يتجاهلها. يأخذ Node معرف المستخدم من claim sub الموثق، ثم يستدعي Laravel عبر POST /api/internal/socket/v1/rooms/{roomId}/authorize-join باستخدام اعتماد خدمة خاص بالخوادم. لا ينضم الاتصال إلا بعد أن يعيد Laravel allowed=true ومعرف مستخدم مطابقًا لـsub.

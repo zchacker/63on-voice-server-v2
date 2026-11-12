@@ -1,4 +1,5 @@
 const { installSocketAuth } = require('./auth/socket.auth');
+const authEvents = require('./auth/auth.events');
 const roomEvents = require('./rooms/room.events');
 const chatEvents = require('./chat/chat.events');
 const giftEvents = require('./gifts/gift.events');
@@ -9,6 +10,7 @@ module.exports = (io) => {
     installSocketAuth(io);
     io.on('connection', (socket) => {
         console.log('New connection');
+        authEvents(io, socket);
         roomEvents(io, socket);
         chatEvents(io, socket);
         giftEvents(io, socket);

@@ -16,6 +16,8 @@
 
 ## أحداث الغرف والمستخدم
 
+لتجديد التوكن على الاتصال القائم، راجعوا [refreshSocketSession](auth/refreshSocketSession.md).
+
 - rooms/joinRoom.md
 - users/leaveRoom.md
 - users/disconnect.md

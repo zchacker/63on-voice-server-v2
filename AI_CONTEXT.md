@@ -1,6 +1,6 @@
 # AI project context
 
-Verified: 2026-10-27. Project root: /Users/hiramdiazdiaz/Documents/63on-voice-server-v2.
+Verified: 2026-11-12. Project root: /Users/hiramdiazdiaz/Documents/63on-voice-server-v2.
 Read this file before inspecting source. Search symbols and open only files related to the task. Do not scan node_modules.
 
 ## Owner-defined module architecture
@@ -19,13 +19,14 @@ demo/ is legacy reference only. services/laravel.service.js is the internal Lara
 
 ## Module map
 - socket/auth/socket.auth.js: verifies HS256 JWT handshake.auth.token, including sub, exp, iss, aud, and optional nbf.
+- socket/auth/auth.events.js, auth.service.js, auth.validation.js, auth.state.js: refreshSocketSession accepts a newer valid JWT for the same active user, replaces the expiry timer, and preserves room/mic/temporary-role state. Emits socketSessionRefreshed {userId, expiresAt, expiresIn} or socketSessionRefreshRejected {code, message}. Packet checks read the latest authenticatedClaims. Frontend requests a Laravel token about 60 seconds before expiry, updates socket.auth for future handshakes, and sends the refresh event on the active connection. Expired sessions still disconnect and require a fresh handshake and join.
 - socket/rooms/: join authorization with Laravel, room membership and microphone seat allocation. Voice media is handled separately by LiveKit.
 - socket/rooms/room.state.js: liveRooms maps roomId -> Map(socketId,user); micSpots maps roomId -> spot-number object. These remain process-local.
 - socket/users/: explicit leaveRoom and disconnect cleanup.
 - socket/chat/: sendMessage with normal-user chat-lock enforcement.
 - socket/gifts/: sendGift room broadcast; no payment validation.
 - socket/moderation/: moderation events/use cases, validation and local mirror of persistent Laravel moderation state; banned users are not mirrored locally.
-- services/laravel.service.js: internal POST requests to Laravel join authorization and moderation commands; it can also call the proposed idempotent audit-events route. When that route is absent, durable actions fall back to Laravel's audited command route. It reads server environment variables only and never logs secrets.
+- services/laravel.service.js: internal POST requests to Laravel join authorization, moderation commands, and the two-phase audit-events route. When the audit route is unavailable, durable actions fall back to Laravel's command route. It reads server environment variables only and never logs secrets.
 - services/livekit.service.js: LiveKit Server SDK adapter for removing active room participants; API credentials are server-only.
 - services/internal-http.service.js: authenticated Laravel-to-Node room metadata update endpoint; only validated public room fields are broadcast.
 
@@ -36,8 +37,8 @@ Room joins require a verified JWT and a successful POST to Laravel /api/internal
 SOCKET_JWT_SECRET and SOCKET_INTERNAL_SERVICE_TOKEN must each be at least 32 random characters, different from each other, and match Laravel's values. SOCKET_LARAVEL_API_BASE_URL is the Laravel origin without /api. The internal service token authenticates Node-to-Laravel and Laravel-to-Node calls; never expose either secret to a frontend.
 
 ## Moderation and state ownership
-Laravel is the durable source of truth for bans, fixed moderator roles, mic mutes and message locks. Node sends ban, unban, promote_fixed, demote_fixed, mute_mic, unmute_mic, lock_messages and unlock_messages commands with UUID requestId before changing its local mirror or broadcasting success. Laravel returns the saved state and records success/business rejection in the command table. When the separate audit-events route is absent, Node uses this command route for those durable actions.
-The currently documented Laravel API has no audit-events route. As a result, locally rejected attempts are not recorded by Laravel, and removeUser/promoteTemporaryModerator remain fail-closed until an audit contract exists. Temporary roles end when the target's last active room socket leaves. Live room membership, mic spots and temporary roles are process-local. Node reports joined/left room connections to Laravel; Laravel's database `rooms.online_count` is the source of truth for room-list counts. The required presence endpoint is documented in LARAVEL_ROOM_PRESENCE_REQUEST.md. No Redis presence service or client-facing Socket count subscription is used. Ban state is not mirrored in a Node map; Laravel remains its source of truth.
+Laravel is the durable source of truth for bans, fixed moderator roles, mic mutes and message locks. Node sends ban, unban, promote_fixed, demote_fixed, mute_mic, unmute_mic, lock_messages and unlock_messages commands with UUID requestId before changing its local mirror or broadcasting success. Laravel returns the saved state and records success/business rejection in the command table. Node also records each moderation attempt through Laravel's `/api/internal/socket/v1/moderation/audit-events` started/completed contract. The audit table has its own unique requestId so audit writes do not collide with command idempotency.
+`GET /api/rooms/{roomId}/moderation-events` merges command and audit records and includes live-only `removeUser` and `promoteTemporaryModerator` events. Temporary roles end when the target's last active room socket leaves. Live room membership, mic spots and temporary roles are process-local. Node reports joined/left room connections to Laravel; Laravel's database `rooms.online_count` is the source of truth for room-list counts. The presence endpoint is documented in LARAVEL_ROOM_PRESENCE_REQUEST.md. No Redis presence service or client-facing Socket count subscription is used. Ban state is not mirrored in a Node map; Laravel remains its source of truth.
 Room metadata update ingress is implemented in Node, but Laravel does not yet call it after PATCH /api/rooms/{roomId}; roomUpdated therefore needs a Laravel post-commit callback contract before it is end-to-end.
 Room roles sent to the frontend are owner, root, fixed, temporary, or normal. Laravel saved-command authorization remains authoritative; SOCKET_ROOT_MODERATOR_IDS does not bypass its database role rules.
 Keep docs/socket-api/en and docs/socket-api/ar synchronized with the Socket event contract. FRONTEND_SOCKET_API.md and FRONTEND_SOCKET_API.en.md are entrypoints.
