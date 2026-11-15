@@ -2,6 +2,7 @@ const state = require('./room.state');
 const validation = require('./room.validation');
 const moderation = require('../moderation/moderation.service');
 const laravel = require('../../services/laravel.service');
+const policy = require('./room-policy.service');
 
 function emitError(socket, event, result) {
     socket.emit(event, { code: result.code, message: result.message });
@@ -76,13 +77,22 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
         }
 
         const userId = socket.authenticatedUserId;
+        const identity = { user_id: userId };
+        const moderationState = require('../moderation/moderation.state');
+        if (moderationState.getCommandActorRole(roomId, userId) === 'temporary_moderator')
+            identity.role = 'temporary_moderator';
+        const roomPolicy = await policy.readPolicy(roomId, identity);
+        if (!isCurrentJoin(socket, attempt)) return;
+        if (roomPolicy.permissions.entry_error) {
+            throw new laravel.LaravelServiceError(roomPolicy.permissions.entry_error, 'Room access is restricted.', 403);
+        }
         const user = {
             userId,
             name: authorization.user.name,
             avatar: authorization.user.avatar ?? authorization.user.img ?? null,
             socketId: socket.id
         };
-        if (socket.roomId && socket.roomId !== roomId) leaveCurrentRoom(io, socket);
+        if (socket.roomId && socket.roomId !== roomId) leaveCurrentRoom(io, socket, 'room_changed');
         await socket.join(roomId);
         if (!isCurrentJoin(socket, attempt)) {
             // قد يبدأ طلب أحدث للغرفة نفسها؛ لا نسحب عضويته أثناء إلغاء الطلب القديم.
@@ -90,7 +100,10 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
             return;
         }
 
+        authorization.moderation.micMuted = !roomPolicy.permissions.can_publish;
+        authorization.role = roomPolicy.permissions.role === 'temporary_moderator' ? 'normal' : roomPolicy.permissions.role;
         moderation.syncFromAuthorization(roomId, userId, authorization);
+        socket.roomPolicy = roomPolicy;
         socket.roomId = roomId;
         socket.requestedRoomId = requestedRoomId;
         socket.liveKitRoomName = authorization.room.liveKitRoomName;
@@ -113,30 +126,41 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
         if (moderation.isMuted(roomId, userId)) socket.emit('micMuted', { roomId, userId });
         socket.pendingRoomId = null;
         socket.pendingCanonicalRoomId = null;
+        try { await policy.syncJoinedParticipant(io, socket); }
+        catch (error) { socket.emit('roomPolicySyncFailed', { roomId, code: error.code }); }
     });
 }
 
-function requestMic(io, socket, payload = {}) {
+async function requestMic(io, socket, payload = {}) {
     if (!payload || typeof payload !== 'object') payload = {};
     const joined = validation.validateJoinedUser(socket);
     if (!joined.valid) return emitError(socket, 'micRequestRejected', joined);
     const checked = validation.validateMicSpot(payload.spotNumber);
     if (!checked.valid) return emitError(socket, 'micRequestRejected', checked);
-    if (moderation.isMuted(socket.roomId, socket.user.userId)) {
-        return emitError(socket, 'micRequestRejected', {
-            code: 'MIC_MUTED', message: 'Your microphone is muted by a moderator.'
-        });
-    }
-    const spots = state.getMicSpots(socket.roomId) || {};
-    if (spots[payload.spotNumber]) {
-        return emitError(socket, 'micRejected', {
-            code: 'MIC_SPOT_TAKEN', message: 'تم أخذ المكان بالفعل'
-        });
-    }
-    spots[payload.spotNumber] = socket.user;
-    state.setMicSpots(socket.roomId, spots);
-    socket.emit('takeMic', { spotNumber: payload.spotNumber });
-    io.to(socket.roomId).emit('micUpdate', { ...spots });
+    const roomId = socket.roomId;
+    const user = socket.user;
+    return state.runRoomOperation(roomId, async () => {
+        if (socket.roomId !== roomId || socket.user !== user || socket.connected === false) return;
+        let currentPolicy;
+        try { currentPolicy = await policy.readPolicy(roomId, policy.connectionIdentity(socket, roomId)); }
+        catch (error) { return emitError(socket, 'micRequestRejected', laravel.getPublicError(error)); }
+        if (socket.roomId !== roomId || socket.user !== user || socket.connected === false) return;
+        if (!currentPolicy.permissions.can_publish) {
+            return emitError(socket, 'micRequestRejected', {
+                code: 'MIC_MUTED', message: 'Room policy does not allow microphone publishing.'
+            });
+        }
+        const spots = state.getMicSpots(roomId) || {};
+        if (spots[payload.spotNumber]) {
+            return emitError(socket, 'micRejected', {
+                code: 'MIC_SPOT_TAKEN', message: 'تم أخذ المكان بالفعل'
+            });
+        }
+        spots[payload.spotNumber] = socket.user;
+        state.setMicSpots(roomId, spots);
+        socket.emit('takeMic', { spotNumber: payload.spotNumber });
+        io.to(roomId).emit('micUpdate', { ...spots });
+    });
 }
 
 function leaveMic(io, socket, payload = {}) {
@@ -156,10 +180,16 @@ function leaveMic(io, socket, payload = {}) {
     io.to(socket.roomId).emit('micUpdate', { ...spots });
 }
 
-function audioData(io, socket, data) {
+async function audioData(io, socket, data) {
     const joined = validation.validateJoinedUser(socket);
     if (!joined.valid) return emitError(socket, 'audioDataRejected', joined);
-    if (moderation.isMuted(socket.roomId, socket.user.userId)) {
+    const roomId = socket.roomId;
+    const user = socket.user;
+    let currentPolicy;
+    try { currentPolicy = await policy.readPolicy(roomId, policy.connectionIdentity(socket, roomId)); }
+    catch (error) { return emitError(socket, 'audioDataRejected', laravel.getPublicError(error)); }
+    if (socket.roomId !== roomId || socket.user !== user || socket.connected === false) return;
+    if (!currentPolicy.permissions.can_publish) {
         return emitError(socket, 'audioDataRejected', {
             code: 'MIC_MUTED', message: 'Your microphone is muted by a moderator.'
         });
@@ -170,9 +200,10 @@ function audioData(io, socket, data) {
     });
 }
 
-function leaveCurrentRoom(io, socket) {
+function leaveCurrentRoom(io, socket, leaveReason = 'left') {
     const roomId = socket.roomId;
     const userId = socket.user?.userId;
+    const liveKitRoomName = socket.liveKitRoomName;
     if (!roomId) return;
 
     const micChanged = state.clearUserMic(roomId, userId);
@@ -182,12 +213,13 @@ function leaveCurrentRoom(io, socket) {
     socket.requestedRoomId = null;
     socket.liveKitRoomName = null;
     socket.user = null;
-    moderation.handleLeave(io, socket, roomId, userId);
+    moderation.handleLeave(io, socket, roomId, userId, liveKitRoomName);
     io.to(roomId).emit('userList', state.getRoomUsers(roomId));
     if (micChanged) io.to(roomId).emit('micUpdate', { ...(state.getMicSpots(roomId) || {}) });
     state.clearRoomState(roomId);
     laravel.notifyRoomPresence(roomId, {
         event: 'left',
+        leaveReason: leaveReason === 'room_changed' ? 'left' : leaveReason,
         userId,
         connectionId: socket.id,
         eventVersion: state.nextPresenceEventVersion(socket)
@@ -198,11 +230,11 @@ function broadcastRoomUpdated(io, roomId, fields) {
     io.to(roomId).emit('roomUpdated', { roomId, ...fields });
 }
 
-function leaveRoom(io, socket) {
+function leaveRoom(io, socket, leaveReason = 'left') {
     socket.roomJoinAttempt = (socket.roomJoinAttempt || 0) + 1;
     socket.pendingRoomId = null;
     socket.pendingCanonicalRoomId = null;
-    leaveCurrentRoom(io, socket);
+    leaveCurrentRoom(io, socket, leaveReason);
 }
 
 module.exports = { joinRoom, requestMic, leaveMic, audioData, leaveRoom, broadcastRoomUpdated };

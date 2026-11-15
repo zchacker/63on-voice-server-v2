@@ -95,7 +95,7 @@ function cancelPendingJoins(io, roomId, targetUserId) {
     }
 }
 
-function removeTargetFromRoom(io, roomId, targetUserId, notify, reason) {
+function removeTargetFromRoom(io, roomId, targetUserId, notify, reason, leaveReason = 'kick') {
     const sockets = activeSockets(io, roomId, targetUserId);
     for (const target of sockets) {
         target.leave(roomId);
@@ -106,12 +106,14 @@ function removeTargetFromRoom(io, roomId, targetUserId, notify, reason) {
         roomState.removeRoomUser(roomId, target.id);
         laravel.notifyRoomPresence(roomId, {
             event: 'left',
+            leaveReason,
             userId: targetUserId,
             connectionId: target.id,
             eventVersion: roomState.nextPresenceEventVersion(target)
         });
         // Notify only after the Socket membership and local user entry are cleared.
         target.emit(notify, { roomId, userId: targetUserId, reason: reason || null });
+        if (leaveReason === 'ban') target.disconnect(true);
     }
 
     state.removeTemporary(roomId, targetUserId);
@@ -205,12 +207,12 @@ async function moderationAction(io, socket, action, payload = {}, context) {
         case 'banUser':
             let livekitError;
             try {
-                await livekit.removeActiveParticipant(liveKitRoomName, targetUserId);
+                await require('../rooms/room-policy.service').removeBannedParticipant(liveKitRoomName, targetUserId, roomId);
             } catch (error) {
                 livekitError = error;
             }
             cancelPendingJoins(io, roomId, targetUserId);
-            removeTargetFromRoom(io, roomId, targetUserId, 'kicked', reason);
+            removeTargetFromRoom(io, roomId, targetUserId, 'kicked', reason, 'ban');
             io.to(roomId).emit('userBanned', { roomId, userId: targetUserId });
             if (livekitError) {
                 return fail(socket, action, payload, {
@@ -299,6 +301,8 @@ async function moderationAction(io, socket, action, payload = {}, context) {
         io.to(roomId).emit('moderatorUpdated', { roomId, userId: targetUserId, role });
     }
 
+    try { await require('../rooms/room-policy.service').refreshRoomParticipants(io, roomId); }
+    catch (error) { return fail(socket, action, payload, { code: error.code, message: 'The change was saved but policy synchronization failed.' }, context); }
     emitResult(socket, action, payload, {
         success: true,
         message: 'Action completed.',
@@ -331,6 +335,8 @@ async function lockMessages(io, socket, payload = {}, locked, context) {
         normalUsersOnly: locked
     };
     io.to(payload.roomId).emit('messageLockUpdated', eventPayload);
+    try { await require('../rooms/room-policy.service').refreshRoomParticipants(io, payload.roomId); }
+    catch (error) { return fail(socket, action, payload, { code: error.code, message: 'The change was saved but policy synchronization failed.' }, context); }
     emitResult(socket, action, payload, {
         success: true,
         message: 'Action completed.',
@@ -597,9 +603,14 @@ function handleJoin(socket, roomId) {
     socket.emit('roleUpdated', { roomId, userId, role });
 }
 
-function handleLeave(io, socket, roomId, userId) {
-    if (roomId && userId && !activeSockets(io, roomId, userId).length)
-        state.removeTemporary(roomId, userId);
+function handleLeave(io, socket, roomId, userId, liveKitRoomName) {
+    if (!roomId || !userId || activeSockets(io, roomId, userId).length) return;
+    const temporary = state.getCommandActorRole(roomId, userId) === 'temporary_moderator';
+    state.removeTemporary(roomId, userId);
+    if (temporary && liveKitRoomName) {
+        require('../rooms/room-policy.service').syncDetachedParticipant(io, roomId, userId, liveKitRoomName)
+            .catch((error) => console.error('Temporary role LiveKit cleanup failed.', { roomId, code: error.code || 'ROOM_POLICY_SYNC_FAILED' }));
+    }
 }
 
 function isMuted(roomId, userId) {

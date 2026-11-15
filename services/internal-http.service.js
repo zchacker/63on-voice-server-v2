@@ -19,6 +19,19 @@ function matchesServiceCredential(request) {
 }
 
 function registerInternalHttpRoutes(app, io) {
+    app.post('/internal/socket/v1/rooms/:roomId/policy-refresh', express.json({ limit: '1kb' }), (request, response) => {
+        const authorized = matchesServiceCredential(request);
+        if (authorized !== true) return response.status(authorized === null ? 503 : 401).json({ success: false, code: 'SOCKET_SERVICE_AUTH_FAILED' });
+        const roomId = request.params.roomId;
+        if (!/^[1-9][0-9]*$/.test(roomId) || !request.body || Array.isArray(request.body)
+            || typeof request.body !== 'object' || Object.keys(request.body).length)
+            return response.status(422).json({ success: false, code: 'INVALID_POLICY_REFRESH' });
+        // Acknowledge before the queue runs: Node may be waiting for Laravel's command response.
+        require('../socket/rooms/room-policy.service').refreshRoom(io, roomId)
+            .catch((error) => console.error('Notified room policy refresh failed.', { roomId, code: error.code }));
+        return response.status(202).json({ success: true, roomId });
+    });
+
     app.post(
         '/internal/socket/v1/rooms/:roomId/updates',
         express.json({ limit: '8kb' }),

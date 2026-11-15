@@ -39,8 +39,8 @@ function getClient() {
         || cachedConfiguration.host !== config.host
         || cachedConfiguration.apiKey !== config.apiKey
         || cachedConfiguration.secret !== config.secret) {
-        const { LiveKitAPI } = require('livekit-server-sdk');
-        cachedClient = new LiveKitAPI(config);
+        const { RoomServiceClient } = require('livekit-server-sdk');
+        cachedClient = new RoomServiceClient(config.host, config.apiKey, config.secret);
         cachedConfiguration = config;
     }
     return cachedClient;
@@ -57,13 +57,32 @@ async function removeActiveParticipant(roomName, identity) {
     const room = roomName.trim();
     const participantIdentity = identity.trim();
     const client = getClient();
-    const participants = await client.room.listParticipants(room);
+    const participants = await client.listParticipants(room);
     if (!participants.some((participant) => participant.identity === participantIdentity)) {
         return { removed: false };
     }
 
-    await client.room.removeParticipant(room, participantIdentity);
+    await client.removeParticipant(room, participantIdentity);
     return { removed: true };
 }
 
-module.exports = { removeActiveParticipant };
+async function updateParticipantPermissions(roomName, identity, permissions) {
+    if (typeof roomName !== 'string' || !roomName.trim() || typeof identity !== 'string' || !identity.trim())
+        throw new Error('A trusted LiveKit room and identity are required.');
+    const client = getClient();
+    const participants = await client.listParticipants(roomName);
+    const participant = participants.find((candidate) => candidate.identity === identity);
+    if (!participant) return { updated: false };
+    const permission = {
+        ...participant.permission,
+        canSubscribe: participant.permission?.canSubscribe ?? true,
+        canPublish: permissions.can_publish,
+        canPublishData: permissions.direct_data_allowed
+    };
+    if (participant.permission?.canPublish === permission.canPublish
+        && participant.permission?.canPublishData === permission.canPublishData) return { updated: false };
+    await client.updateParticipant(roomName, identity, { permission });
+    return { updated: true };
+}
+
+module.exports = { removeActiveParticipant, updateParticipantPermissions };

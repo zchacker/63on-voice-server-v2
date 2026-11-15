@@ -4,6 +4,6 @@ function leaveRoom(io, socket) {
     roomService.leaveRoom(io, socket);
 }
 function disconnect(io, socket) {
-    leaveRoom(io, socket);
+    roomService.leaveRoom(io, socket, 'disconnect');
 }
 module.exports = { leaveRoom, disconnect };

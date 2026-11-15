@@ -161,11 +161,14 @@ async function postInternal(path, body) {
     }
 
     if (!response.ok) {
-        throw new LaravelServiceError(
+        const error = new LaravelServiceError(
             responseErrorCode(payload, response.status),
             responseErrorMessage(payload),
             response.status
         );
+        if (Number.isSafeInteger(payload.retry_after) && payload.retry_after > 0)
+            error.retry_after = payload.retry_after;
+        throw error;
     }
 
     return payload;
@@ -194,6 +197,7 @@ async function notifyRoomPresence(roomId, event) {
         connectionId: event.connectionId,
         eventVersion: event.eventVersion
     };
+    if (event.leaveReason) payload.leaveReason = event.leaveReason;
     const path = '/rooms/' + encodeURIComponent(roomId) + '/presence';
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -343,7 +347,8 @@ function completeModerationAudit(event, result) {
 
 function getPublicError(error) {
     if (error instanceof LaravelServiceError) {
-        return { code: error.code, message: error.message };
+        return { code: error.code, message: error.message,
+            ...(error.retry_after ? { retry_after: error.retry_after } : {}) };
     }
     return {
         code: 'LARAVEL_UNAVAILABLE',
@@ -353,6 +358,8 @@ function getPublicError(error) {
 
 module.exports = {
     authorizeRoomJoin,
+    readRoomPolicy: (roomId, identity) => postInternal('/rooms/' + encodeURIComponent(roomId) + '/policy', identity),
+    authorizeMessage: (roomId, identity, message) => postInternal('/rooms/' + encodeURIComponent(roomId) + '/authorize-message', { ...identity, message }),
     notifyRoomPresence,
     saveModerationCommand,
     startModerationAudit,

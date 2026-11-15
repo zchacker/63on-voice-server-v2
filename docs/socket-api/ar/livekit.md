@@ -69,3 +69,5 @@
 ## المصادر
 
 عنوان الصوت المحدد من مالك المشروع: livekit.63on.com. مرجع Laravel API_REFERENCE.md وapp/Http/Controllers/Api/Room/RoomsContoller.php في join_room. ملفات Node: socket/rooms/room.events.js وroom.service.js.
+
+> Updated room policy, 600-second token TTL, LiveKit synchronization, and production rollout requirements supersede the older limitations above: [room controls](room-controls.md).

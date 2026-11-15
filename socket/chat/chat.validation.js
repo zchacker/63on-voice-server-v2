@@ -1,12 +1,12 @@
-const moderationService = require('../moderation/moderation.service');
-
 function validateSendMessage(socket, message) {
     if (!socket.roomId || !socket.user?.userId)
         return { valid: false, code: 'NOT_IN_ROOM', message: 'Join a room before sending messages.' };
-    if (!moderationService.canSendMessage(socket))
-        return { valid: false, code: 'MESSAGES_LOCKED', message: 'Only moderators can send messages while chat is locked.' };
-    if (message === undefined || message === null)
+    if (socket.authenticatedUserId !== socket.user.userId)
+        return { valid: false, code: 'AUTHENTICATION_REQUIRED', message: 'A trusted connection identity is required.' };
+    if (typeof message !== 'string' || !message.trim())
         return { valid: false, code: 'INVALID_MESSAGE', message: 'Message payload is required.' };
+    if ([...message].length > 10000)
+        return { valid: false, code: 'MESSAGE_TOO_LONG', message: 'Messages cannot exceed 10000 characters.' };
     return { valid: true };
 }
 module.exports = { validateSendMessage };
