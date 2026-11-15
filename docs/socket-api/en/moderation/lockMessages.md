@@ -13,7 +13,7 @@ The actor must be authenticated, joined to this room, and authorized by local va
 - Actor receives moderationResult with action lockMessages.
 - Room receives messageLockUpdated { roomId, locked: true, changedBy, normalUsersOnly: true }.
 
-Normal users are blocked by sendMessage with messageRejected code MESSAGES_LOCKED. Authenticated moderators may continue sending messages.
+Normal users are blocked by sendMessage with messageRejected code MESSAGES_DISABLED. Authenticated moderators may continue sending messages.
 
 ## Behavior
 

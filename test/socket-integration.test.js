@@ -11,6 +11,7 @@ const rooms = require('../socket/rooms/room.service');
 const roomState = require('../socket/rooms/room.state');
 const moderation = require('../socket/moderation/moderation.service');
 const state = require('../socket/moderation/moderation.state');
+const policyFixture = require('./helpers/room-policy');
 const { verifyToken } = require('../socket/auth/socket.auth');
 
 const originalAuthorize = laravel.authorizeRoomJoin;
@@ -22,7 +23,13 @@ const originalRemoveLiveKitParticipant = livekit.removeActiveParticipant;
 const originalFetch = global.fetch;
 const environment = { ...process.env };
 
-test.beforeEach(() => {
+test.beforeEach((t) => {
+    t.mock.method(laravel, 'readRoomPolicy', async (roomId, identity) => policyFixture.response(roomId, identity.user_id, {
+        locked: state.areMessagesLocked(roomId),
+        user: { mic_muted: state.isUserMuted(roomId, identity.user_id),
+            role: identity.user_id === '1' ? 'owner' : state.getPersistentRole(roomId, identity.user_id) }
+    }));
+    t.mock.method(livekit, 'updateParticipantPermissions', async () => ({ updated: false }));
     laravel.notifyRoomPresence = async () => true;
     laravel.startModerationAudit = async (event) => ({ requestId: event.requestId, status: 'started' });
     laravel.completeModerationAudit = async (event) => ({ requestId: event.requestId, status: 'completed' });
@@ -71,7 +78,8 @@ function createSocket(io, id, userId, roomId = null) {
         joined: new Set(roomId ? [roomId] : []),
         emit(event, data) { this.events.push({ event, data }); },
         join(room) { this.joined.add(room); },
-        leave(room) { this.joined.delete(room); }
+        leave(room) { this.joined.delete(room); },
+        disconnect() { this.connected = false; }
     };
     io.sockets.sockets.set(id, socket);
     if (roomId) roomState.addRoomUser(roomId, id, socket.user);
@@ -743,4 +751,11 @@ test('room update ingress authenticates Laravel and emits only validated public 
     }, token);
     assert.equal(internalField.status, 422);
     assert.equal(io.broadcasts.length, 1);
+    const policy = require('../socket/rooms/room-policy.service');
+    const refresh = t.mock.method(policy, 'applyUpdate', () => {});
+    assert.equal((await sendJson(server, '/internal/socket/v1/rooms/10/policy-refresh', {})).status, 401);
+    const update = policyFixture.snapshot('10', null, { version: '2' });
+    assert.equal((await sendJson(server, '/internal/socket/v1/rooms/10/policy-refresh', update, token)).status, 200);
+    assert.equal(refresh.mock.callCount(), 1);
+    assert.deepEqual(refresh.mock.calls[0].arguments, [io, '10', update]);
 });

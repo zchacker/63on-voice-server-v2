@@ -47,7 +47,7 @@ Success response:
       }
     }
 
-The documented current token lifetime is one hour. permission is admin for the owner matched by room username, otherwise user. Obtain the actual room object from Laravel; keep its id/username mapping together so Socket.IO and LiveKit participants refer to the same application room.
+New tokens last 600 seconds; previously issued one-hour tokens require the rollout plan below. permission is admin for the owner matched by room username, otherwise user. Obtain the actual room object from Laravel; keep its id/username mapping together so Socket.IO and LiveKit participants refer to the same application room.
 
 ## Frontend sequence
 
@@ -69,3 +69,5 @@ The current Laravel `/api/room/join` controller checks for an active persisted r
 ## Sources
 
 Owner-specified audio host: livekit.63on.com. Laravel API_REFERENCE.md and app/Http/Controllers/Api/Room/RoomsContoller.php (join_room). Node socket/rooms/room.events.js and room.service.js.
+
+> Updated room policy, 600-second token TTL, LiveKit synchronization, and production rollout requirements supersede the older limitations above: [room controls](room-controls.md).

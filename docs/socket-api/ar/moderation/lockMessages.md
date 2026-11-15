@@ -13,7 +13,7 @@
 - يستقبل المنفذ moderationResult مع action=lockMessages.
 - تستقبل الغرفة messageLockUpdated { roomId, locked: true, changedBy, normalUsersOnly: true }.
 
-يرفض sendMessage من المستخدم العادي عبر messageRejected مع MESSAGES_LOCKED. يمكن للمشرف الموثق الاستمرار في الإرسال.
+يرفض sendMessage من المستخدم العادي عبر messageRejected مع MESSAGES_DISABLED. يمكن للمشرف الموثق الاستمرار في الإرسال.
 
 ## السلوك
 

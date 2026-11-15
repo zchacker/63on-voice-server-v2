@@ -19,6 +19,26 @@ function matchesServiceCredential(request) {
 }
 
 function registerInternalHttpRoutes(app, io) {
+    // Apply trusted versioned changes locally; media work runs outside this HTTP response.
+    app.post('/internal/socket/v1/rooms/:roomId/policy-refresh', express.json({ limit: '256kb' }), (request, response) => {
+        const authorized = matchesServiceCredential(request);
+        if (authorized !== true) {
+            return response.status(authorized === null ? 503 : 401).json({ success: false, code: 'SOCKET_SERVICE_AUTH_FAILED' });
+        }
+
+        const roomId = request.params.roomId;
+        if (!/^[1-9][0-9]*$/.test(roomId)) {
+            return response.status(422).json({ success: false, code: 'INVALID_ROOM_ID' });
+        }
+
+        try {
+            require('../socket/rooms/room-policy.service').applyUpdate(io, roomId, request.body);
+            return response.json({ success: true, roomId, version: request.body.version });
+        } catch (error) {
+            return response.status(error.status || 500).json({ success: false, code: error.code || 'POLICY_UPDATE_FAILED' });
+        }
+    });
+
     app.post(
         '/internal/socket/v1/rooms/:roomId/updates',
         express.json({ limit: '8kb' }),

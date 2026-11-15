@@ -8,6 +8,14 @@ const registerSocketEvents = require('../socket');
 const roomState = require('../socket/rooms/room.state');
 const moderationState = require('../socket/moderation/moderation.state');
 const laravel = require('../services/laravel.service');
+const livekit = require('../services/livekit.service');
+const policy = require('../socket/rooms/room-policy.service');
+const policyFixture = require('./helpers/room-policy');
+
+test.beforeEach((t) => {
+    t.mock.method(laravel, 'readRoomPolicy', async (roomId, identity) => policyFixture.response(roomId, identity.user_id));
+    t.mock.method(livekit, 'updateParticipantPermissions', async () => ({ updated: false }));
+});
 
 const SECRET = 'session-refresh-test-secret-'.repeat(2);
 const START = 1800000000000;
@@ -67,7 +75,7 @@ function connection(t, authenticated = true) {
     };
 }
 
-test('registered refresh preserves room, seat and temporary role past the old expiry', (t) => {
+test('registered refresh preserves room, seat and temporary role past the old expiry', async (t) => {
     const { io, socket, advance, now } = connection(t);
     const roomId = 'session-refresh-room';
     socket.roomId = roomId;
@@ -75,6 +83,9 @@ test('registered refresh preserves room, seat and temporary role past the old ex
     roomState.addRoomUser(roomId, socket.id, socket.user);
     roomState.setMicSpots(roomId, { 0: socket.user });
     moderationState.promoteTemporary(roomId, '42');
+    socket.liveKitRoomName = 'livekit-' + roomId;
+    socket.roomPolicy = policyFixture.response(roomId, '42').data;
+    policy.syncJoinedParticipant(io, socket);
     const originalUser = socket.user;
     const disconnectListeners = socket.listenerCount('disconnect');
     let confirmation;
@@ -86,7 +97,7 @@ test('registered refresh preserves room, seat and temporary role past the old ex
     assert.deepEqual(confirmation, { userId: '42', expiresAt, expiresIn: 180 });
     assert.equal(socket.listenerCount('disconnect'), disconnectListeners);
     advance(50000);
-    socket.receive('sendMessage', 'Still connected after the old expiry');
+    await require('../socket/chat/chat.service').sendMessage(io, socket, 'Still connected after the old expiry');
     assert.equal(io.broadcasts.at(-1).event, 'newMessage');
     assert.equal(socket.connected, true);
     assert.equal(socket.roomId, roomId);

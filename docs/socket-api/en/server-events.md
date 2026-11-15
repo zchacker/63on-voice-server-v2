@@ -20,7 +20,7 @@ The server emits these events. Payloads below reflect current code.
 | audioData (legacy) | Other sockets in same room | { userId, audio }; userId is the application user ID, audio is the payload sent by the publisher. |
 | audioDataRejected (legacy) | Sending user | { code, message }; NOT_IN_ROOM or MIC_MUTED. |
 | newMessage | Room | { message, user }. |
-| messageRejected | Sending user | { code, message }; NOT_IN_ROOM, MESSAGES_LOCKED, or INVALID_MESSAGE. |
+| messageRejected | Sending user | { code, message }; NOT_IN_ROOM, MESSAGES_DISABLED, or INVALID_MESSAGE. |
 | sendGift | Room | { gift, user }. |
 | giftRejected | Sending user | { code: "NOT_IN_ROOM", message }. |
 | joinRoomRejected | Joining user | { roomId, userId, code, message }; reports JWT, Laravel authorization, or configuration errors. |
@@ -43,3 +43,5 @@ All files under socket/**/events.js and the services they call.
 Voice transport uses [LiveKit](livekit.md). The two audioData events above remain in the source for legacy reference and are unused by the current frontend. takeMic, leaveMic, micMuted, and kicked must be connected to the corresponding LiveKit SDK actions.
 
 `userBanned` and `userUnbanned` keep their existing `{ roomId, userId }` payloads and are broadcast only after Laravel confirms the persistent command. `kicked` is delivered after the target leaves the Socket room.
+
+| roomPolicyUpdated | Affected user | `{roomId, settings, permissions}` |

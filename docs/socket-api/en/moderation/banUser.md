@@ -28,3 +28,5 @@ socket/moderation/moderation.events.js; socket/moderation/moderation.service.js;
 ## LiveKit media
 
 Node removes the target's active participant through the LiveKit Server API. The frontend should still leave its local LiveKit room after `kicked`. See [LiveKit integration](../livekit.md).
+
+LiveKit removal is now queued independently with retries. Success confirms the saved/local action; it does not wait for LiveKit convergence.
