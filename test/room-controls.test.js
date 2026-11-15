@@ -100,6 +100,8 @@ test('Unicode length, visitor links, staff exemptions and message locks are enfo
     chat.sendMessage(io, owner, '😀😀');
     assert.ok(io.broadcasts.some((event) => event.event === 'newMessage' && event.data.message === '😀😀'));
     chat.sendMessage(io, owner, '😀😀😀');
+    assert.ok(io.broadcasts.some((event) => event.event === 'newMessage' && event.data.message === '😀😀😀'));
+    chat.sendMessage(io, owner, 'ع'.repeat(10001));
     assert.equal(owner.events.at(-1).data.code, 'MESSAGE_TOO_LONG');
 });
 
@@ -304,4 +306,16 @@ test('temporary moderator promotion refreshes only the target without any policy
     assert.equal(target.roomPolicy.permissions.role, 'temporary_moderator');
     assert.equal(unrelated.events.length, eventCount);
     assert.equal(laravel.readRoomPolicy.mock.callCount(), 0);
+});
+
+ test('owner and both moderator roles bypass room length and interval, normal users retain them', () => {
+    const resolve = require('../socket/rooms/room-policy.validation').resolvePermissions;
+    const settings = fixture.snapshot('10', null, { settings: { message_max_length: 2, message_interval_seconds: 10 } }).settings;
+    for (const role of ['owner', 'fixed_moderator', 'temporary_moderator']) {
+        const permissions = resolve(settings, { role, is_member: false }, true, false);
+        assert.equal(permissions.message_max_length, null);
+        assert.equal(permissions.message_interval_seconds, null);
+        assert.equal(permissions.can_message, true);
+    }
+    assert.equal(resolve(settings, { role: 'normal', is_member: false }, false, false).message_max_length, 2);
 });

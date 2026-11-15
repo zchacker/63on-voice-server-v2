@@ -70,7 +70,7 @@ function resolvePermissions(settings, facts, messagesLocked, temporary, now = Da
         can_message: canMessage,
         direct_data_allowed: canMessage && settings.message_max_length === null && interval === null && linksAllowed,
         links_allowed: linksAllowed,
-        message_max_length: settings.message_max_length,
+        message_max_length: staff ? null : settings.message_max_length,
         message_interval_seconds: interval
     };
 }
