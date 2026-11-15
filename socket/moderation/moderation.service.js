@@ -95,9 +95,11 @@ function cancelPendingJoins(io, roomId, targetUserId) {
     }
 }
 
+// Notify bans before disconnecting, then record the matching presence departure.
 function removeTargetFromRoom(io, roomId, targetUserId, notify, reason, leaveReason = 'kick') {
     const sockets = activeSockets(io, roomId, targetUserId);
     for (const target of sockets) {
+        if (leaveReason === 'ban') target.emit(notify, { roomId, userId: targetUserId, reason: reason || 'USER_BANNED' });
         target.leave(roomId);
         target.roomId = null;
         target.requestedRoomId = null;
@@ -111,8 +113,9 @@ function removeTargetFromRoom(io, roomId, targetUserId, notify, reason, leaveRea
             connectionId: target.id,
             eventVersion: roomState.nextPresenceEventVersion(target)
         });
-        // Notify only after the Socket membership and local user entry are cleared.
-        target.emit(notify, { roomId, userId: targetUserId, reason: reason || null });
+        // Non-ban kicks retain the existing post-removal notification contract.
+        if (leaveReason !== 'ban') target.emit(notify, { roomId, userId: targetUserId, reason: reason || null });
+        require('../rooms/room-policy.service').releaseConnection(roomId, targetUserId, target.id);
         if (leaveReason === 'ban') target.disconnect(true);
     }
 
@@ -156,6 +159,7 @@ async function persistAction(socket, action, payload) {
         state.rememberPendingCommand(roomId, { roomIdentifier, command });
         result.uncertain = true;
     }
+    if (result.valid && response.policy) result.policy = response.policy;
     return result;
 }
 
@@ -198,41 +202,29 @@ async function moderationAction(io, socket, action, payload = {}, context) {
         ? await persistAction(socket, action, payload)
         : { valid: true, state: null };
     if (!persisted.valid) return rejectPersistence(io, socket, action, payload, persisted, context);
-    if (persisted.state) {
+    if (persisted.state && !persisted.policy) {
         applyPersistedState(roomId, targetUserId, persisted.state);
+    }
+
+    if (persisted.policy) {
+        require('../rooms/room-policy.service').applyUpdate(io, roomId, persisted.policy);
     }
 
     let role;
     switch (action) {
         case 'banUser':
-            let livekitError;
-            try {
-                await require('../rooms/room-policy.service').removeBannedParticipant(liveKitRoomName, targetUserId, roomId);
-            } catch (error) {
-                livekitError = error;
-            }
             cancelPendingJoins(io, roomId, targetUserId);
             removeTargetFromRoom(io, roomId, targetUserId, 'kicked', reason, 'ban');
-            io.to(roomId).emit('userBanned', { roomId, userId: targetUserId });
-            if (livekitError) {
-                return fail(socket, action, payload, {
-                    code: livekitError.code || 'LIVEKIT_REMOVAL_FAILED',
-                    message: 'The ban was saved, but LiveKit could not remove the active participant.'
-                }, context);
+            if (!persisted.policy) {
+                require('../rooms/room-policy.service').removeBannedParticipant(liveKitRoomName, targetUserId, roomId);
             }
+            io.to(roomId).emit('userBanned', { roomId, userId: targetUserId });
             break;
         case 'unbanUser':
             io.to(roomId).emit('userUnbanned', { roomId, userId: targetUserId });
             break;
         case 'removeUser':
-            try {
-                await livekit.removeActiveParticipant(liveKitRoomName, targetUserId);
-            } catch (error) {
-                return fail(socket, action, payload, {
-                    code: error.code || 'LIVEKIT_REMOVAL_FAILED',
-                    message: 'LiveKit could not remove the active participant.'
-                }, context);
-            }
+            require('../rooms/room-policy.service').removeBannedParticipant(liveKitRoomName, targetUserId, roomId);
             removeTargetFromRoom(io, roomId, targetUserId, 'kicked', reason);
             io.to(roomId).emit('userRemoved', { roomId, userId: targetUserId });
             break;
@@ -301,8 +293,7 @@ async function moderationAction(io, socket, action, payload = {}, context) {
         io.to(roomId).emit('moderatorUpdated', { roomId, userId: targetUserId, role });
     }
 
-    try { await require('../rooms/room-policy.service').refreshRoomParticipants(io, roomId); }
-    catch (error) { return fail(socket, action, payload, { code: error.code, message: 'The change was saved but policy synchronization failed.' }, context); }
+    if (!persisted.policy) require('../rooms/room-policy.service').refreshUser(io, roomId, targetUserId);
     emitResult(socket, action, payload, {
         success: true,
         message: 'Action completed.',
@@ -326,7 +317,7 @@ async function lockMessages(io, socket, payload = {}, locked, context) {
             message: 'Laravel did not confirm the requested message lock state.'
         }, context);
     }
-    applyPersistedState(payload.roomId, null, persisted.state);
+    if (!persisted.policy) applyPersistedState(payload.roomId, null, persisted.state);
 
     const eventPayload = {
         roomId: payload.roomId,
@@ -335,8 +326,8 @@ async function lockMessages(io, socket, payload = {}, locked, context) {
         normalUsersOnly: locked
     };
     io.to(payload.roomId).emit('messageLockUpdated', eventPayload);
-    try { await require('../rooms/room-policy.service').refreshRoomParticipants(io, payload.roomId); }
-    catch (error) { return fail(socket, action, payload, { code: error.code, message: 'The change was saved but policy synchronization failed.' }, context); }
+    if (persisted.policy) require('../rooms/room-policy.service').applyUpdate(io, payload.roomId, persisted.policy);
+    else require('../rooms/room-policy.service').refreshRoomParticipants(io, payload.roomId);
     emitResult(socket, action, payload, {
         success: true,
         message: 'Action completed.',

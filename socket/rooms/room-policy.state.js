@@ -1,22 +1,165 @@
-// shortcut: removal retries are in memory; persist them when restart recovery is required.
-const pendingRemovals = new Map();
-function rememberRemoval(roomName, identity, roomId) { pendingRemovals.set(JSON.stringify([roomName, identity]), { roomName, identity, roomId }); }
-function clearRemoval(roomName, identity) { pendingRemovals.delete(JSON.stringify([roomName, identity])); }
-function getPendingRemovals() { return [...pendingRemovals.values()]; }
+const rooms = new Map();
 const expiryTimers = new Map();
-function setExpiryTimer(roomId, timestamp, callback, keepEarlier = false) {
-    const existing = expiryTimers.get(roomId);
-    if (keepEarlier && existing && (!timestamp || existing.timestamp <= Date.parse(timestamp))) return;
-    clearTimeout(existing?.timer);
-    expiryTimers.delete(roomId);
+const cooldowns = new Map();
+const mediaJobs = new Map();
+const readyMedia = new Set();
+let activeMediaJobs = 0;
+
+// Keep one room snapshot and independently versioned facts for each admitted user.
+function applySnapshot(snapshot) {
+    let room = rooms.get(snapshot.room_id);
+    if (!room) {
+        room = { version: '-1', users: new Map() };
+        rooms.set(snapshot.room_id, room);
+    }
+
+    const changes = { room: false, user: false };
+    if (BigInt(snapshot.version) > BigInt(room.version)) {
+        changes.room = !room.settings || JSON.stringify(room.settings) !== JSON.stringify(snapshot.settings)
+            || room.messagesLocked !== snapshot.messages_locked;
+        Object.assign(room, {
+            version: snapshot.version,
+            settings: snapshot.settings,
+            messagesLocked: snapshot.messages_locked,
+            liveKitRoomName: snapshot.livekit_room_name
+        });
+    }
+
+    if (snapshot.user) {
+        const previous = room.users.get(snapshot.user.id);
+        if (!previous || BigInt(snapshot.version) > BigInt(previous.version)) {
+            room.users.set(snapshot.user.id, {
+                version: snapshot.version,
+                facts: snapshot.user,
+                socketIds: previous?.socketIds || new Set()
+            });
+            changes.user = true;
+        }
+    }
+
+    return changes;
+}
+
+function getRoom(roomId) { return rooms.get(roomId); }
+function getUser(roomId, userId) { return rooms.get(roomId)?.users.get(userId); }
+
+function addConnection(roomId, userId, socketId) {
+    getUser(roomId, userId).socketIds.add(socketId);
+}
+
+// Release inactive membership data; a future admission loads a fresh Laravel snapshot.
+function removeConnection(roomId, userId, socketId) {
+    const room = getRoom(roomId);
+    const user = getUser(roomId, userId);
+    if (!user) return;
+
+    user.socketIds.delete(socketId);
+    if (!user.socketIds.size) {
+        room.users.delete(userId);
+        clearExpiry(roomId, userId);
+    }
+
+    if (!room.users.size) rooms.delete(roomId);
+}
+
+function timerKey(roomId, userId) { return JSON.stringify([roomId, userId]); }
+
+// Schedule only the affected user's mute expiry, replacing any superseded deadline.
+function setExpiry(roomId, userId, timestamp, callback) {
+    clearExpiry(roomId, userId);
     if (!timestamp) return;
-    const delay = Math.max(1, Date.parse(timestamp) - Date.now() + 50);
-    const timer = setTimeout(() => { expiryTimers.delete(roomId); callback(); }, Math.min(delay, 2147483647));
+
+    const key = timerKey(roomId, userId);
+    const timer = setTimeout(() => {
+        expiryTimers.delete(key);
+        callback();
+    }, Math.min(2147483647, Math.max(1, Date.parse(timestamp) - Date.now() + 10)));
+
     timer.unref?.();
-    expiryTimers.set(roomId, { timer, timestamp: Date.parse(timestamp) });
+    expiryTimers.set(key, timer);
 }
-function clearExpiryTimers() {
-    for (const entry of expiryTimers.values()) clearTimeout(entry.timer);
+
+function clearExpiry(roomId, userId) {
+    const key = timerKey(roomId, userId);
+    clearTimeout(expiryTimers.get(key));
+    expiryTimers.delete(key);
+}
+
+function retryAfter(roomId, userId, now = Date.now()) {
+    const until = cooldowns.get(timerKey(roomId, userId))?.until || 0;
+    return Math.max(0, Math.ceil((until - now) / 1000));
+}
+
+// Reserve slow mode synchronously across all sockets of the same user in this process.
+function reserveMessage(roomId, userId, seconds) {
+    if (!seconds) return;
+
+    const key = timerKey(roomId, userId);
+    clearTimeout(cooldowns.get(key)?.timer);
+    const timer = setTimeout(() => cooldowns.delete(key), seconds * 1000);
+    timer.unref?.();
+    cooldowns.set(key, { until: Date.now() + seconds * 1000, timer });
+}
+
+function mediaKey(roomId, userId) { return timerKey(roomId, userId); }
+function getMediaJob(roomId, userId) { return mediaJobs.get(mediaKey(roomId, userId)); }
+
+// Coalesce pending media changes while preserving ordering for each participant.
+function enqueueMedia(task) {
+    const key = mediaKey(task.roomId, task.userId);
+    let job = mediaJobs.get(key);
+    if (!job) {
+        job = { key, running: false, attempts: 0, timer: null };
+        mediaJobs.set(key, job);
+    }
+
+    if (job.task?.version && task.version && BigInt(task.version) < BigInt(job.task.version)) return;
+    clearTimeout(job.timer);
+    job.timer = null;
+    job.task = task;
+    if (!job.running) readyMedia.add(key);
+}
+
+function takeMediaJob() {
+    if (activeMediaJobs >= 8 || !readyMedia.size) return null;
+
+    const key = readyMedia.values().next().value;
+    readyMedia.delete(key);
+    const job = mediaJobs.get(key);
+    job.running = true;
+    activeMediaJobs++;
+    return job;
+}
+
+// Retry failed media work only; there is no interval scanning rooms or participants.
+function finishMediaJob(job, task, succeeded, resume) {
+    job.running = false;
+    activeMediaJobs--;
+
+    if (job.task !== task) {
+        readyMedia.add(job.key);
+        return;
+    }
+    if (succeeded) {
+        mediaJobs.delete(job.key);
+        return;
+    }
+
+    const delay = Math.min(30000, 500 * (2 ** Math.min(job.attempts++, 6)));
+    job.timer = setTimeout(() => { job.timer = null; readyMedia.add(job.key); resume(); }, delay);
+    job.timer.unref?.();
+}
+
+function clearTimers() {
+    for (const timer of expiryTimers.values()) clearTimeout(timer);
+    for (const entry of cooldowns.values()) clearTimeout(entry.timer);
+    for (const job of mediaJobs.values()) clearTimeout(job.timer);
     expiryTimers.clear();
+    cooldowns.clear();
 }
-module.exports = { rememberRemoval, clearRemoval, getPendingRemovals, setExpiryTimer, clearExpiryTimers };
+
+module.exports = {
+    applySnapshot, getRoom, getUser, addConnection, removeConnection,
+    setExpiry, retryAfter, reserveMessage,
+    getMediaJob, enqueueMedia, takeMediaJob, finishMediaJob, clearTimers
+};

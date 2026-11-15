@@ -20,7 +20,7 @@
 
 يستقبل المرسل messageRejected { code, message }:
 - NOT_IN_ROOM: لم ينجح joinRoom.
-- MESSAGES_LOCKED: مستخدم عادي حاول الإرسال أثناء القفل.
+- MESSAGES_DISABLED: مستخدم عادي حاول الإرسال أثناء القفل.
 - INVALID_MESSAGE: الحمولة null أو undefined.
 
 يستطيع المشرف الموثق الإرسال أثناء القفل. لا يستخدم الحدث callback للإقرار.
@@ -28,3 +28,5 @@
 ## المصدر
 
 socket/chat/chat.events.js وchat.service.js وchat.validation.js.
+
+التحقق الآن محلي من سياسة الغرفة والمستخدم دون طلب Laravel لكل رسالة. عالج أيضًا MESSAGE_TOO_LONG وLINKS_DISABLED وSLOW_MODE مع retry_after بالثواني وPOLICY_UNAVAILABLE. راجع [التحكم بالغرف](../room-controls.md).

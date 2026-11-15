@@ -20,7 +20,7 @@
 | audioData (legacy) | بقية sockets في الغرفة نفسها | { userId, audio }؛ userId معرف التطبيق وaudio هي الحمولة المرسلة. |
 | audioDataRejected (legacy) | مرسل الصوت | { code, message }؛ NOT_IN_ROOM أو MIC_MUTED. |
 | newMessage | الغرفة | { message, user }. |
-| messageRejected | مرسل الرسالة | { code, message }؛ NOT_IN_ROOM أو MESSAGES_LOCKED أو INVALID_MESSAGE. |
+| messageRejected | مرسل الرسالة | { code, message }؛ NOT_IN_ROOM أو MESSAGES_DISABLED أو INVALID_MESSAGE. |
 | sendGift | الغرفة | { gift, user }. |
 | giftRejected | مرسل الهدية | { code: "NOT_IN_ROOM", message }. |
 | joinRoomRejected | طالب الانضمام | { roomId, userId, code, message }؛ لأخطاء JWT أو رفض Laravel أو إعداد الخادم. |
@@ -43,3 +43,5 @@
 يستخدم نقل الصوت [LiveKit](livekit.md). حدثا audioData أعلاه قديمان باقِيان في المصدر ولا تستخدمهما الواجهة الحالية. اربطوا takeMic وleaveMic وmicMuted وkicked بإجراءات LiveKit SDK المناسبة.
 
 تحافظ userBanned وuserUnbanned على الحمولة الحالية `{ roomId, userId }`، ولا تبثان إلا بعد تأكيد Laravel حفظ الأمر. يصل kicked بعد إخراج الهدف من غرفة Socket.
+
+| roomPolicyUpdated | المستخدم المعني | `{roomId, settings, permissions}` |

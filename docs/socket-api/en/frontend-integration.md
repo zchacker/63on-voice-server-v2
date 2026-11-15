@@ -126,7 +126,7 @@ Listen for the room broadcasts:
 
 Messages are echoed to the sender as well as other room members. Gifts are only broadcast: the server does not verify price, balance, payment or inventory.
 
-When chat is locked, normal users receive messageRejected with MESSAGES_LOCKED. Moderators may continue to send messages.
+When chat is locked, normal users receive messageRejected with MESSAGES_DISABLED. Moderators may continue to send messages.
 
 ## 7. Audio and microphone seats: LiveKit
 
@@ -205,7 +205,7 @@ Common client handling:
     socket.on("micLeaveRejected", ({ code, message }) => showMicError(code, message));
     socket.on("giftRejected", ({ code, message }) => showGiftError(code, message));
 
-For moderation, handle failures through moderationResult rather than separate error events. Some common codes are NOT_IN_ROOM, INVALID_MIC_SPOT, MIC_MUTED, MESSAGES_LOCKED, FORBIDDEN, SELF_TARGET, INSUFFICIENT_ROLE, TARGET_NOT_IN_ROOM and TARGET_NOT_AUTHENTICATED.
+For moderation, handle failures through moderationResult rather than separate error events. Some common codes are NOT_IN_ROOM, INVALID_MIC_SPOT, MIC_MUTED, MESSAGES_DISABLED, FORBIDDEN, SELF_TARGET, INSUFFICIENT_ROLE, TARGET_NOT_IN_ROOM and TARGET_NOT_AUTHENTICATED.
 
 Laravel is the durable source for bans, fixed roles, microphone mutes, and message locks. Each join reloads the authorized user and room state. Temporary moderator assignments and live room/microphone membership stay in Node memory and are lost on restart. Multiple Node workers do not yet share live Socket.IO broadcasts.
 

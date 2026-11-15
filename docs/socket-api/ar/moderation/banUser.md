@@ -28,3 +28,5 @@ socket/moderation/moderation.events.js وmoderation.service.js وmoderation.vali
 ## الصوت عبر LiveKit
 
 يزيل Node المشارك النشط من LiveKit Server API. وعلى الواجهة مغادرة غرفة LiveKit المحلية بعد وصول `kicked`. راجعوا [دليل LiveKit](../livekit.md).
+
+إزالة LiveKit الآن مجدولة بصورة مستقلة مع إعادة المحاولة؛ النجاح يؤكد الحفظ والتنفيذ المحلي ولا ينتظر اكتمال LiveKit.

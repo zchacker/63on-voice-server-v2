@@ -5,137 +5,226 @@ const roomState = require('./room.state');
 const validation = require('./room-policy.validation');
 const state = require('./room-policy.state');
 
+// Build identity from the authenticated connection, never client-supplied profile fields.
 function connectionIdentity(socket, roomId) {
-    if (!socket.authenticatedUserId || socket.authenticatedUserId !== socket.user?.userId)
+    if (!socket.authenticatedUserId || socket.authenticatedUserId !== socket.user?.userId) {
         throw new laravel.LaravelServiceError('AUTHENTICATION_REQUIRED', 'A trusted connection identity is required.', 403);
+    }
+
     const identity = { user_id: socket.authenticatedUserId };
-    if (moderationState.getCommandActorRole(roomId, socket.authenticatedUserId) === 'temporary_moderator')
+    if (moderationState.getCommandActorRole(roomId, socket.authenticatedUserId) === 'temporary_moderator') {
         identity.role = 'temporary_moderator';
+    }
+
     return identity;
 }
 
+// Laravel is consulted on admission, not for ordinary messages or microphone requests.
 async function readPolicy(roomId, identity) {
     const result = await laravel.readRoomPolicy(roomId, identity);
     const checked = validation.validatePolicy(result, roomId);
     if (!checked.valid) throw new laravel.LaravelServiceError(checked.code, checked.message, 502);
+    if (checked.data.snapshot.user?.id !== identity.user_id) {
+        throw new laravel.LaravelServiceError('INVALID_LARAVEL_IDENTITY', 'Policy identity does not match the connection.', 502);
+    }
+
     return checked.data;
 }
 
-async function syncJoinedParticipant(io, socket) {
-    const roomId = socket.roomId;
-    const data = socket.roomPolicy;
-    scheduleExpiry(io, roomId, data.next_change_at, true);
-    socket.emit('roomPolicyUpdated', { roomId, settings: data.settings, permissions: data.permissions });
-    await livekit.updateParticipantPermissions(socket.liveKitRoomName, socket.authenticatedUserId, data.permissions);
+// Prefer newer pushed facts when a Laravel join response races with a policy update.
+function validateAdmission(roomId, snapshot) {
+    const cachedRoom = state.getRoom(roomId);
+    const cachedUser = state.getUser(roomId, snapshot.user.id);
+    const room = cachedRoom && BigInt(cachedRoom.version) > BigInt(snapshot.version)
+        ? cachedRoom : { settings: snapshot.settings, messagesLocked: snapshot.messages_locked };
+    const facts = cachedUser && BigInt(cachedUser.version) > BigInt(snapshot.version) ? cachedUser.facts : snapshot.user;
+    const temporary = moderationState.getCommandActorRole(roomId, facts.id) === 'temporary_moderator';
+    const permissions = validation.resolvePermissions(room.settings, facts, room.messagesLocked, temporary);
+
+    if (permissions.entry_error) return permissions.entry_error;
+    if (room.settings.members_only && !facts.is_member && permissions.role === 'normal') return 'MEMBERS_ONLY';
+    return null;
 }
 
-function scheduleExpiry(io, roomId, timestamp, keepEarlier = false) {
-    state.setExpiryTimer(roomId, timestamp, () => {
-        refreshRoom(io, roomId).catch((error) => console.error('Room policy expiry refresh failed.', { roomId, code: error.code }));
-    }, keepEarlier);
+function currentPolicy(roomId, userId) {
+    const room = state.getRoom(roomId);
+    const user = state.getUser(roomId, userId);
+    if (!room || !user) return null;
+
+    const temporary = moderationState.getCommandActorRole(roomId, userId) === 'temporary_moderator';
+    return {
+        settings: room.settings,
+        permissions: validation.resolvePermissions(room.settings, user.facts, room.messagesLocked, temporary)
+    };
 }
 
-async function removeBannedParticipant(roomName, identity, roomId) {
-    state.rememberRemoval(roomName, identity, roomId);
-    await livekit.removeActiveParticipant(roomName, identity);
-    state.clearRemoval(roomName, identity);
+// Register one admitted connection and apply its cached policy without awaiting LiveKit.
+function syncJoinedParticipant(io, socket) {
+    const snapshot = socket.roomPolicy.snapshot;
+    const changes = state.applySnapshot(snapshot);
+    state.addConnection(socket.roomId, socket.authenticatedUserId, socket.id);
+    socket.roomPolicy = null;
+    if (state.getRoom(socket.roomId).messagesLocked) moderationState.lockMessages(socket.roomId);
+    else moderationState.unlockMessages(socket.roomId);
+
+    if (changes.room) refreshRoomParticipants(io, socket.roomId);
+    else refreshUser(io, socket.roomId, socket.authenticatedUserId);
 }
 
-async function syncDetachedParticipant(io, roomId, userId, roomName) {
-    return roomState.runRoomOperation(roomId, async () => {
-        const identity = { user_id: userId };
-        if (moderationState.getCommandActorRole(roomId, userId) === 'temporary_moderator')
-            identity.role = 'temporary_moderator';
-        const data = await readPolicy(roomId, identity);
-        if (data.permissions.entry_error === 'USER_BANNED')
-            return removeBannedParticipant(roomName, userId, roomId);
-        await livekit.updateParticipantPermissions(roomName, userId, data.permissions);
-    });
-}
+// Apply independent room/user versions so out-of-order events cannot restore old privileges.
+function applyUpdate(io, roomId, snapshot) {
+    const checked = validation.validateSnapshot(snapshot, roomId);
+    if (!checked.valid) throw new laravel.LaravelServiceError(checked.code, checked.message, 422);
 
-async function refreshRoom(io, roomId) {
-    return roomState.runRoomOperation(roomId, () => refreshRoomParticipants(io, roomId));
-}
-
-// The caller holds the shared room queue when joining or applying a moderation command.
-async function refreshRoomParticipants(io, roomId) {
-    const sockets = [...io.sockets.sockets.values()].filter((socket) => socket.roomId === roomId);
-    const failures = [];
-    let nextChange = null;
-    for (const socket of sockets) {
-        const user = socket.user;
-        try {
-            const data = await readPolicy(roomId, connectionIdentity(socket, roomId));
-            if (socket.roomId !== roomId || socket.user !== user) continue;
-            if (data.next_change_at && (!nextChange || Date.parse(data.next_change_at) < Date.parse(nextChange)))
-                nextChange = data.next_change_at;
-            const permissions = data.permissions;
-            if (permissions.entry_error === 'USER_BANNED') {
-                let removalError;
-                try { await removeBannedParticipant(socket.liveKitRoomName, socket.authenticatedUserId, roomId); }
-                catch (error) { removalError = error; }
-                socket.emit('kicked', { roomId, userId: socket.authenticatedUserId, reason: 'USER_BANNED' });
-                require('./room.service').leaveRoom(io, socket, 'ban');
-                socket.disconnect(true);
-                if (removalError) throw removalError;
-                continue;
-            }
-            moderationState.setPersistentRole(roomId, user.userId,
-                permissions.role === 'temporary_moderator' ? 'normal' : permissions.role);
-            if (permissions.can_publish) moderationState.unmuteUser(roomId, user.userId);
-            else {
-                moderationState.muteUser(roomId, user.userId);
-                if (roomState.clearUserMic(roomId, user.userId))
-                    io.to(roomId).emit('micUpdate', { ...(roomState.getMicSpots(roomId) || {}) });
-            }
-            const previous = socket.roomPolicy;
-            socket.roomPolicy = data;
-            if (JSON.stringify(previous?.settings) !== JSON.stringify(data.settings)
-                || JSON.stringify(previous?.permissions) !== JSON.stringify(permissions)) {
-                socket.emit('roomPolicyUpdated', { roomId, settings: data.settings, permissions });
-            }
-            if (previous && previous.permissions.can_publish !== permissions.can_publish)
-                socket.emit(permissions.can_publish ? 'micUnmuted' : 'micMuted', { roomId, userId: user.userId });
-            if (previous && previous.permissions.role !== permissions.role)
-                require('../moderation/moderation.service').handleJoin(socket, roomId);
-            // Entry restrictions gate new joins; membership changes do not kick existing visitors.
-            await livekit.updateParticipantPermissions(socket.liveKitRoomName, socket.authenticatedUserId, permissions);
-        } catch (error) {
-            failures.push({ userId: user?.userId, code: error.code || 'ROOM_POLICY_SYNC_FAILED' });
+    const room = state.getRoom(roomId);
+    if (!room) {
+        if (snapshot.user && state.getMediaJob(roomId, snapshot.user.id)) {
+            queueMedia(snapshot, snapshot.user, validation.resolvePermissions(
+                snapshot.settings, snapshot.user, snapshot.messages_locked, false
+            ));
         }
+        return;
     }
-    scheduleExpiry(io, roomId, nextChange);
-    if (failures.length) {
-        const error = new Error('Some room participants could not be synchronized.');
-        error.code = 'ROOM_POLICY_SYNC_FAILED';
-        error.failures = failures;
-        throw error;
+
+    const changes = state.applySnapshot(snapshot);
+    if (changes.room) refreshRoomParticipants(io, roomId);
+    else if (changes.user) refreshUser(io, roomId, snapshot.user.id);
+
+    if (snapshot.user && !state.getUser(roomId, snapshot.user.id)?.socketIds.size) {
+        if (state.getMediaJob(roomId, snapshot.user.id)) {
+            queueMedia(snapshot, snapshot.user, validation.resolvePermissions(
+                snapshot.settings, snapshot.user, snapshot.messages_locked, false
+            ));
+        }
+        state.removeConnection(roomId, snapshot.user.id, null);
     }
 }
 
-function startPolicyRefresh(io) {
-    let running = false;
-    const timer = setInterval(async () => {
-        if (running) return;
-        running = true;
-        try {
-            for (const target of state.getPendingRemovals()) {
-                try {
-                    const data = await readPolicy(target.roomId, { user_id: target.identity });
-                    if (data.permissions.entry_error === 'USER_BANNED')
-                        await removeBannedParticipant(target.roomName, target.identity, target.roomId);
-                    else state.clearRemoval(target.roomName, target.identity);
-                }
-                catch (error) { console.error('LiveKit ban removal retry failed.', { code: error.code || 'LIVEKIT_REMOVAL_FAILED' }); }
-            }
-            const rooms = new Set([...io.sockets.sockets.values()].map((socket) => socket.roomId).filter(Boolean));
-            for (const roomId of rooms) {
-                try { await refreshRoom(io, roomId); }
-                catch (error) { console.error('Room policy synchronization failed.', { roomId, code: error.code }); }
-            }
-        } finally { running = false; }
-    }, 60000);
-    timer.unref?.();
-    return () => { clearInterval(timer); state.clearExpiryTimers(); };
+// Recompute locally only when a setting changes; no HTTP call is made for participants.
+function refreshRoomParticipants(io, roomId) {
+    const room = state.getRoom(roomId);
+    if (!room) return;
+
+    if (room.messagesLocked) moderationState.lockMessages(roomId);
+    else moderationState.unlockMessages(roomId);
+
+    for (const userId of [...room.users.keys()]) refreshUser(io, roomId, userId);
 }
-module.exports = { syncDetachedParticipant, syncJoinedParticipant, removeBannedParticipant, connectionIdentity, readPolicy, refreshRoom, refreshRoomParticipants, startPolicyRefresh };
+
+// Update one user's connections and schedule only that user's temporary mute expiry.
+function refreshUser(io, roomId, userId) {
+    const room = state.getRoom(roomId);
+    const user = state.getUser(roomId, userId);
+    const data = currentPolicy(roomId, userId);
+    if (!user || !data) return;
+
+    moderationState.setPersistentRole(roomId, userId, user.facts.role);
+    if (data.permissions.can_publish) moderationState.unmuteUser(roomId, userId);
+    else moderationState.muteUser(roomId, userId);
+
+    if (!data.permissions.can_publish && roomState.clearUserMic(roomId, userId)) {
+        io.to(roomId).emit('micUpdate', { ...(roomState.getMicSpots(roomId) || {}) });
+    }
+
+    let mediaChanged = false;
+    for (const socketId of [...user.socketIds]) {
+        const socket = io.sockets.sockets.get(socketId);
+        if (!socket || socket.roomId !== roomId || socket.authenticatedUserId !== userId) continue;
+
+        const previous = socket.roomPolicy?.permissions;
+        if (data.permissions.entry_error === 'USER_BANNED') {
+            socket.emit('kicked', { roomId, userId, reason: 'USER_BANNED' });
+            require('./room.service').leaveRoom(io, socket, 'ban');
+            socket.disconnect(true);
+            mediaChanged = true;
+            continue;
+        }
+
+        socket.roomPolicy = data;
+        socket.emit('roomPolicyUpdated', { roomId, ...data });
+        if (previous && previous.can_publish !== data.permissions.can_publish) {
+            socket.emit(data.permissions.can_publish ? 'micUnmuted' : 'micMuted', { roomId, userId });
+        }
+        if (previous && previous.role !== data.permissions.role) {
+            require('../moderation/moderation.service').handleJoin(socket, roomId);
+        }
+
+        mediaChanged ||= !previous || previous.can_publish !== data.permissions.can_publish
+            || previous.direct_data_allowed !== data.permissions.direct_data_allowed;
+    }
+
+    if (mediaChanged) queueMedia({ room_id: roomId, livekit_room_name: room.liveKitRoomName }, user.facts, data.permissions);
+    scheduleMuteExpiry(io, roomId, userId, user);
+}
+
+function scheduleMuteExpiry(io, roomId, userId, user) {
+    const dates = ['mic', 'messages'].flatMap((kind) => {
+        const until = user.facts[kind + '_muted_until'];
+        return user.facts[kind + '_muted'] && until && Date.parse(until) > Date.now() ? [until] : [];
+    });
+    const next = dates.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+
+    if (user.socketIds.size) state.setExpiry(roomId, userId, next, () => refreshUser(io, roomId, userId));
+}
+
+// Revoke a departed temporary moderator's media privileges using the already cached facts.
+async function syncDetachedParticipant(io, roomId, userId, roomName) {
+    const data = currentPolicy(roomId, userId);
+    const user = state.getUser(roomId, userId);
+    if (data && user) queueMedia({ room_id: roomId, livekit_room_name: roomName }, user.facts, data.permissions);
+}
+
+function releaseConnection(roomId, userId, socketId) {
+    state.removeConnection(roomId, userId, socketId);
+}
+
+// Queue only changed media permissions, with bounded concurrency independent of room commands.
+function queueMedia(snapshot, facts, permissions) {
+    state.enqueueMedia({
+        roomId: snapshot.room_id,
+        version: snapshot.version || state.getRoom(snapshot.room_id)?.version || '0',
+        userId: facts.id,
+        roomName: snapshot.livekit_room_name,
+        remove: permissions.entry_error === 'USER_BANNED',
+        bannedUntil: facts.banned_until,
+        permissions
+    });
+    drainMedia();
+}
+
+function drainMedia() {
+    let job;
+    while ((job = state.takeMediaJob())) runMedia(job);
+}
+
+async function runMedia(job) {
+    const task = job.task;
+    let succeeded = false;
+    try {
+        if (task.remove) {
+            if (!task.bannedUntil || Date.parse(task.bannedUntil) > Date.now()) {
+                await livekit.removeActiveParticipant(task.roomName, task.userId);
+            }
+        } else {
+            await livekit.updateParticipantPermissions(task.roomName, task.userId, task.permissions);
+        }
+        succeeded = true;
+    } catch (error) {
+        console.error('LiveKit policy update will be retried.', { roomId: task.roomId, code: error.code || 'LIVEKIT_UPDATE_FAILED' });
+    } finally {
+        state.finishMediaJob(job, task, succeeded, drainMedia);
+        drainMedia();
+    }
+}
+
+// Existing moderation callers can request removal without holding their room queue on LiveKit.
+async function removeBannedParticipant(roomName, userId, roomId) {
+    state.enqueueMedia({ roomId, userId, roomName, remove: true, bannedUntil: null });
+    drainMedia();
+}
+
+module.exports = {
+    connectionIdentity, readPolicy, validateAdmission, currentPolicy,
+    syncJoinedParticipant, applyUpdate, refreshRoomParticipants, refreshUser,
+    syncDetachedParticipant, releaseConnection, removeBannedParticipant
+};

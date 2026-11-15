@@ -126,7 +126,7 @@
 
 تصل الرسالة للمرسل ولأعضاء الغرفة. الهدية تبث فقط؛ لا يتحقق الخادم من السعر أو الرصيد أو الدفع أو المخزون.
 
-عند قفل الدردشة يستقبل المستخدم العادي messageRejected مع MESSAGES_LOCKED. يظل المشرف قادرًا على الإرسال.
+عند قفل الدردشة يستقبل المستخدم العادي messageRejected مع MESSAGES_DISABLED. يظل المشرف قادرًا على الإرسال.
 
 ## 7. الصوت ومقاعد المايك: LiveKit
 
@@ -205,7 +205,7 @@ audioData وaudioDataRejected حدثان قديمان في المصدر. لا ت
     socket.on("micLeaveRejected", ({ code, message }) => showMicError(code, message));
     socket.on("giftRejected", ({ code, message }) => showGiftError(code, message));
 
-أخطاء الإشراف تصل عبر moderationResult. من الأكواد الشائعة NOT_IN_ROOM وINVALID_MIC_SPOT وMIC_MUTED وMESSAGES_LOCKED وFORBIDDEN وSELF_TARGET وINSUFFICIENT_ROLE وTARGET_NOT_IN_ROOM وTARGET_NOT_AUTHENTICATED.
+أخطاء الإشراف تصل عبر moderationResult. من الأكواد الشائعة NOT_IN_ROOM وINVALID_MIC_SPOT وMIC_MUTED وMESSAGES_DISABLED وFORBIDDEN وSELF_TARGET وINSUFFICIENT_ROLE وTARGET_NOT_IN_ROOM وTARGET_NOT_AUTHENTICATED.
 
 Laravel هو المصدر الدائم للحظر ورتب fixed وكتم المايك وقفل الرسائل. يعيد كل انضمام تحميل هوية المستخدم وحالة الغرفة المصرح بها. تبقى ترقية temporary وعضوية الاتصالات ومقاعد المايك في ذاكرة Node وتضيع عند إعادة التشغيل. لا تتشارك عمليات Node المتعددة بث Socket.IO الحي حاليًا.
 

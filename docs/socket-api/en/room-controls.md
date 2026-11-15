@@ -1,37 +1,71 @@
-# Room controls integration
+# Room controls: local authorization and versioned updates
 
-Node still requires a registered Socket JWT and a successful Laravel `authorize-join`. Client identity/profile/role fields remain untrusted. Before completing admission Node also reads the internal `/policy` and rejects a non-null `permissions.entry_error`, even with HTTP 200. Temporary moderator status comes exclusively from Node's room state.
+Registered admission still requires a verified Socket JWT, successful Laravel `authorize-join`, and a validated internal `/policy` response with no `permissions.entry_error`. There is no anonymous admission or new room JWT contract. Socket token expiry/refresh is unchanged; another device signing in does not disconnect the existing session.
 
-`sendMessage` accepts a non-empty string up to 10,000 Unicode characters. Every broadcast calls Laravel `/authorize-message`; only boolean `allowed: true` permits `newMessage`. Existing `messageRejected` gains optional integer `retry_after` (seconds). Denials preserve Laravel's code, including `MESSAGES_DISABLED`, `LINKS_DISABLED`, `MESSAGE_TOO_LONG`, `SLOW_MODE`, and entry denial codes. Network failures deny the message. Authorization reserves Laravel's interval; messages are not automatically retried.
+Node stores room settings once and user membership, persistent role, bans, mute flags/deadlines, and independent snapshot versions in process memory. Temporary moderator status remains owned by Node. Ordinary messages and microphone requests read this state synchronously, without calling Laravel or waiting for the room operation queue. There is **no periodic scan of participants**.
 
-`roomPolicyUpdated` is sent privately to the affected socket on admission and when settings/effective permissions change:
+## Policy delivery contract
+
+Laravel saves a `room_policy_events` outbox record in the same database transaction as each relevant settings, approved membership, sanction, fixed-role or message-lock change. After commit it posts the immutable snapshot to:
+
+`POST /internal/socket/v1/rooms/{numericRoomId}/policy-refresh`
+
+Authenticate with `Authorization: Bearer <SOCKET_INTERNAL_SERVICE_TOKEN>`. Laravel `SOCKET_NODE_BASE_URL` is the private Node origin without path. The payload is:
 
 ```json
-{"roomId":"10","settings":{},"permissions":{"entry_error":null,"role":"normal","can_publish":true,"can_message":true,"direct_data_allowed":true}}
+{
+  "version": "123",
+  "room_id": "10",
+  "livekit_room_name": "room-username",
+  "settings": {
+    "members_only": false,
+    "allow_anonymous_guests": true,
+    "visitor_messages_allowed": true,
+    "member_messages_allowed": true,
+    "visitor_mic_allowed": true,
+    "member_mic_allowed": true,
+    "visitor_links_allowed": true,
+    "message_max_length": null,
+    "message_interval_seconds": null,
+    "welcome_message": null,
+    "rules": null
+  },
+  "messages_locked": false,
+  "user": {
+    "id": "42",
+    "role": "normal",
+    "is_member": false,
+    "banned": false,
+    "banned_until": null,
+    "mic_muted": false,
+    "mic_muted_until": null,
+    "messages_muted": false,
+    "messages_muted_until": null
+  }
+}
 ```
 
-The real permissions object also includes membership, links, length, and interval fields from Laravel. Welcome/rules are plain text. Existing mic events remain supported; `requestMic` checks current Laravel policy before reserving a seat. Restrictive entry settings do not themselves kick existing visitors; their effective media/message permissions still come from Laravel. Ban removes Socket membership, disconnects the connection, removes the LiveKit participant, and reports `leaveReason: ban`. Registered visits continue through `/presence`, including explicit leave/disconnect/kick/ban reasons.
+`user` is null for room-wide changes. Version is a decimal string. Node compares room settings and each user's version independently: a late event for user B is not suppressed by a newer unrelated event for user A. Duplicate/old snapshots cannot restore older cached privileges. Internal `/policy` adds this envelope as `data.snapshot` so join-time reads and pushed updates use the same version scheme. Saved moderation command responses add `policy` with the same event, allowing Node to apply the saved result without a refresh request. These are additive response fields.
 
-## Synchronization
+Node returns HTTP 200 `{success:true,roomId,version}` after applying local state. This acknowledges local application, not LiveKit completion. Failed/missing/mismatched acknowledgements remain pending in Laravel. `socket:deliver-room-policy` retries up to 100 pending events per invocation, with retry delays from 5 to 300 seconds and no connected-user scan. The Laravel scheduler runs this command every minute; it must be enabled. Attempts may be duplicated; consumers are idempotent. The event table retains delivered versions as well as pending events; do not purge it without a revision watermark/retention design.
 
-Configure Laravel `SOCKET_NODE_BASE_URL` to this Node origin. After committing settings, approved membership changes, sanctions, locks, or fixed roles, Laravel POSTs `{}` to:
+## Client behavior
 
-`/internal/socket/v1/rooms/{canonicalNumericRoomId}/policy-refresh`
+`roomPolicyUpdated` is private to affected sockets and contains `{roomId,settings,permissions}`. The effective permissions include `entry_error,role,is_member,can_publish,can_message,direct_data_allowed,links_allowed,message_max_length,message_interval_seconds`. Welcome/rules are plain text. Existing microphone/role events remain supported.
 
-Use `Authorization: Bearer <SOCKET_INTERNAL_SERVICE_TOKEN>`. The endpoint accepts no client identities, permissions, or room names. HTTP 202 acknowledges scheduling, not successful LiveKit convergence; failures are logged and retried by periodic reconciliation. Immediate acknowledgement avoids deadlock when Node is waiting for a Laravel moderation command. Laravel limits notification delivery to two seconds; failures never roll back committed data. No extra queue worker is required.
+`sendMessage` takes a non-empty string, at most 10,000 Unicode code points. Node enforces length, visitor links, room locks, role exemptions, message mutes and slow mode **locally** before `newMessage`. Failures emit `messageRejected` with `code,message` and optional integer `retry_after` seconds. Conventional URL detection is heuristic, as in Laravel. Slow mode is shared by all sockets of the user in the room and survives immediate reconnection until its deadline in this process; rejected validation does not reserve an interval. The old Laravel `/authorize-message` endpoint remains available for other callers, but Node no longer invokes it per message.
 
-Node reads fresh policies under the existing room operation queue, updates active Socket participants and LiveKit `canPublish`/`canPublishData`, and preserves other LiveKit permissions including `hidden` and `recorder`. Expiry refreshes use the additive `/policy` field `data.next_change_at` (ISO timestamp or null). A one-minute fallback repairs missed notifications and failed refreshes. It runs without overlap and emits client policy events only when policy changes. Failed LiveKit ban removals are retained in memory and retried after checking that the ban is still active. Temporary role removal on the last Socket departure also refreshes the detached LiveKit participant.
+Changing `members_only` gates new admission. Existing visitors keep their admission and remain subject only to applicable message/mic restrictions, not a retroactive membership denial. Laravel's public policy/token APIs still apply their entry checks to new requests. A ban sends `kicked` before disconnect, removes room membership, and records registered departure with `leaveReason:ban`; LiveKit removal is queued independently. Temporary bans need no Node unban timer after disconnection: Laravel checks the current ban on re-entry. Temporary microphone/message mutes schedule a timer only for the affected connected user; at expiry Node recomputes local permissions with no Laravel call. Last temporary moderator departure also queues media privilege cleanup from cached facts.
 
-## Deployment boundary
+## LiveKit and deployment
 
-1. Deploy the Laravel policy endpoints and Node integration together; set the private Node origin and matching distinct service/JWT secrets. Keep notification ingress private and authenticated.
-2. Use a shared atomic Laravel cache (database/Redis) for slow mode. The existing Node room/temporary-role state is single-process. For multiple Node instances, deliver notifications to every instance; a load-balanced callback to one worker is insufficient.
-3. Verify joins/denials, messages and retry seconds, REST settings/membership changes, all sanctions/roles, expiry, two concurrent sockets, and LiveKit publish/data revocation on staging with the real server.
-4. New Laravel LiveKit tokens last 600 seconds. Previously issued tokens are unchanged. On self-hosted LiveKit, removal/permission changes do not invalidate old tokens. Before enabling restrictive production settings, stop issuing old grants, coordinate disconnection/re-entry of existing participants, and wait out the longest previously issued TTL (the previous application default was one hour), or use a separately approved server/key revocation plan. Short TTL alone does not provide instant revocation.
-5. This synchronization covers participants tracked by Socket and temporary-role departure cleanup. A client that connects only to LiveKit, or rejoins using an old LiveKit token without Socket, requires a trusted LiveKit participant-join webhook/admission integration for immediate enforcement. Do not claim production-wide instantaneous restrictions until this is tested and integrated.
+Only changed media rights trigger LiveKit work. Jobs are coalesced per participant, run with at most eight concurrent operations, and retry only failed operations with backoff. They do not occupy the room command/message queue. A newer desired state supersedes queued older work; active operations finish before newer work for the same participant. The adapter reads one participant rather than the full room list, and preserves unrelated grants including `hidden` and `recorder`. There is no trusted platform-observer admission contract yet.
 
-Anonymous Socket entry remains disabled. If introduced later, first define trusted admission and a stable server-issued identity matching LiveKit, then use `/guest-visits` with one immutable visit UUID and original join timestamp for entry/departure/retries; never duplicate registered presence as guest visits.
+Before enabling this release:
 
-There is no trusted platform-observer role yet. No client `hidden`/`admin` field enables it. Existing LiveKit hidden permissions are preserved; future observer admission, private audit, count/visit exclusion, and listen-only grants require a separate trusted Laravel contract.
+1. Apply `database/migrations/2026_11_15_000006_create_room_policy_events_table.php` in Laravel after the preceding room-control migrations. No migrations were run against a real database during development.
+2. Configure `SOCKET_NODE_BASE_URL` and matching distinct internal/JWT secrets; enable Laravel scheduler (`php artisan schedule:work` or the normal `schedule:run` cron). Blank origin keeps events pending. Verify `php artisan socket:deliver-room-policy` and inspect pending delivery failures.
+3. Deploy both projects together. Node requires the new `/policy` snapshot fields. The previous empty-body 202 callback contract is replaced by versioned snapshots and HTTP 200 acknowledgements.
+4. Test real Laravel/Node/LiveKit integration under realistic room sizes and reconnects. No million-connection capacity claim is made by these changes.
 
-Known operational limits: fallback latency may exceed one minute during upstream outages/large room batches; pending LiveKit removals and expiry timers are process-local and do not survive restart. A Node crash still has no visit-closing heartbeat. Monitor synchronization failure logs before enabling production restrictions.
+Known boundaries: room state and slow-mode reservations remain single-process, as requested; multiple Node processes need room ownership/shared state and notification fanout before horizontal scaling. Media retry jobs are in memory and do not survive a process restart; fresh admissions resynchronize connected users. New LiveKit token TTL remains 600 seconds; old tokens are not revoked. Self-hosted LiveKit can accept an older token after removal. Coordinate legacy-token drainage and add trusted LiveKit participant-join enforcement for direct/old-token clients before claiming instantaneous production-wide bans. A Node crash still has no presence heartbeat to close old visits. Anonymous visits and trusted hidden platform observer admission remain deferred.

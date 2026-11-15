@@ -20,7 +20,7 @@ under the event name newMessage.
 
 The sender receives messageRejected { code, message }:
 - NOT_IN_ROOM: joinRoom has not succeeded.
-- MESSAGES_LOCKED: ordinary user tried to write while locked.
+- MESSAGES_DISABLED: ordinary user tried to write while locked.
 - INVALID_MESSAGE: payload is null or undefined.
 
 A valid moderator may still send messages while the room is locked. No callback acknowledgement is used.
@@ -28,3 +28,5 @@ A valid moderator may still send messages while the room is locked. No callback 
 ## Source
 
 socket/chat/chat.events.js; socket/chat/chat.service.js; socket/chat/chat.validation.js.
+
+Validation now uses cached room/user policy without a Laravel request per message. Also handle MESSAGE_TOO_LONG, LINKS_DISABLED, SLOW_MODE (retry_after seconds), and POLICY_UNAVAILABLE. See [room controls](../room-controls.md).

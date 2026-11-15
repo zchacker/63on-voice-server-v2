@@ -8,8 +8,7 @@ const moderationEvents = require('./moderation/moderation.events');
 
 module.exports = (io) => {
     installSocketAuth(io);
-    const stopPolicyRefresh = require('./rooms/room-policy.service').startPolicyRefresh(io);
-    io.engine?.once('close', stopPolicyRefresh);
+    io.engine?.once('close', () => require('./rooms/room-policy.state').clearTimers());
     io.on('connection', (socket) => {
         console.log('New connection');
         authEvents(io, socket);

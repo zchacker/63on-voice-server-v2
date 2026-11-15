@@ -187,10 +187,15 @@ function validateMicSpot(spotNumber) {
     return { valid: true };
 }
 
+// Shared room actions require the same identity established by Socket authentication.
 function validateJoinedUser(socket) {
     if (!socket.roomId || !socket.user?.userId) {
         return { valid: false, code: 'NOT_IN_ROOM', message: 'Join a room first.' };
     }
+    if (socket.authenticatedUserId !== socket.user.userId) {
+        return { valid: false, code: 'AUTHENTICATION_REQUIRED', message: 'A trusted connection identity is required.' };
+    }
+
     return { valid: true };
 }
 

@@ -10,11 +10,10 @@ const moderationState = require('../socket/moderation/moderation.state');
 const laravel = require('../services/laravel.service');
 const livekit = require('../services/livekit.service');
 const policy = require('../socket/rooms/room-policy.service');
+const policyFixture = require('./helpers/room-policy');
 
 test.beforeEach((t) => {
-    t.mock.method(policy, 'startPolicyRefresh', () => () => {});
-    t.mock.method(laravel, 'authorizeMessage', async () => ({ allowed: true }));
-    t.mock.method(laravel, 'readRoomPolicy', async (roomId) => ({ data: { room_id: roomId, settings: {}, permissions: { entry_error: null, can_publish: true, can_message: true, direct_data_allowed: true, role: 'normal' } } }));
+    t.mock.method(laravel, 'readRoomPolicy', async (roomId, identity) => policyFixture.response(roomId, identity.user_id));
     t.mock.method(livekit, 'updateParticipantPermissions', async () => ({ updated: false }));
 });
 
@@ -84,6 +83,9 @@ test('registered refresh preserves room, seat and temporary role past the old ex
     roomState.addRoomUser(roomId, socket.id, socket.user);
     roomState.setMicSpots(roomId, { 0: socket.user });
     moderationState.promoteTemporary(roomId, '42');
+    socket.liveKitRoomName = 'livekit-' + roomId;
+    socket.roomPolicy = policyFixture.response(roomId, '42').data;
+    policy.syncJoinedParticipant(io, socket);
     const originalUser = socket.user;
     const disconnectListeners = socket.listenerCount('disconnect');
     let confirmation;

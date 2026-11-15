@@ -28,3 +28,5 @@ socket/moderation/moderation.events.js; socket/moderation/moderation.service.js;
 ## LiveKit media
 
 Node removes an active participant through the LiveKit Server API before ending Socket membership and emitting `kicked`. A LiveKit failure returns moderationResult with failure and does not finish the Socket removal. This action creates no persistent ban, so the user can rejoin and request a fresh LiveKit token. See [LiveKit integration](../livekit.md).
+
+LiveKit removal is now queued independently with retries. Success confirms the saved/local action; it does not wait for LiveKit convergence.

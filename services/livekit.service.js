@@ -46,33 +46,34 @@ function getClient() {
     return cachedClient;
 }
 
+// Remove one identity directly; an absent participant already satisfies removal.
 async function removeActiveParticipant(roomName, identity) {
-    if (typeof roomName !== 'string' || !roomName.trim()
-        || typeof identity !== 'string' || !identity.trim()) {
-        const error = new Error('A LiveKit room name and participant identity are required.');
-        error.code = 'LIVEKIT_INVALID_PARTICIPANT';
+    if (typeof roomName !== 'string' || !roomName.trim() || typeof identity !== 'string' || !identity.trim()) {
+        throw new Error('A trusted LiveKit room and participant identity are required.');
+    }
+
+    try {
+        await getClient().removeParticipant(roomName, identity);
+        return { removed: true };
+    } catch (error) {
+        if (error.code === 'not_found') return { removed: false };
         throw error;
     }
-
-    const room = roomName.trim();
-    const participantIdentity = identity.trim();
-    const client = getClient();
-    const participants = await client.listParticipants(room);
-    if (!participants.some((participant) => participant.identity === participantIdentity)) {
-        return { removed: false };
-    }
-
-    await client.removeParticipant(room, participantIdentity);
-    return { removed: true };
 }
 
+// Read one participant instead of repeatedly downloading the entire room participant list.
 async function updateParticipantPermissions(roomName, identity, permissions) {
     if (typeof roomName !== 'string' || !roomName.trim() || typeof identity !== 'string' || !identity.trim())
         throw new Error('A trusted LiveKit room and identity are required.');
     const client = getClient();
-    const participants = await client.listParticipants(roomName);
-    const participant = participants.find((candidate) => candidate.identity === identity);
-    if (!participant) return { updated: false };
+    let participant;
+    try {
+        participant = await client.getParticipant(roomName, identity);
+    } catch (error) {
+        if (error.code === 'not_found') return { updated: false };
+        throw error;
+    }
+
     const permission = {
         ...participant.permission,
         canSubscribe: participant.permission?.canSubscribe ?? true,
