@@ -69,3 +69,5 @@ Before enabling this release:
 4. Test real Laravel/Node/LiveKit integration under realistic room sizes and reconnects. No million-connection capacity claim is made by these changes.
 
 Known boundaries: room state and slow-mode reservations remain single-process, as requested; multiple Node processes need room ownership/shared state and notification fanout before horizontal scaling. Media retry jobs are in memory and do not survive a process restart; fresh admissions resynchronize connected users. New LiveKit token TTL remains 600 seconds; old tokens are not revoked. Self-hosted LiveKit can accept an older token after removal. Coordinate legacy-token drainage and add trusted LiveKit participant-join enforcement for direct/old-token clients before claiming instantaneous production-wide bans. A Node crash still has no presence heartbeat to close old visits. Anonymous visits and trusted hidden platform observer admission remain deferred.
+
+Owner, fixed moderators and verified temporary moderators bypass the room-specific message length, slow mode, group message restrictions and visitor link filtering. The global 10,000-code-point input limit still applies.
