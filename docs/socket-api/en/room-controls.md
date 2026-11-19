@@ -17,6 +17,7 @@ Authenticate with `Authorization: Bearer <SOCKET_INTERNAL_SERVICE_TOKEN>`. Larav
   "version": "123",
   "room_id": "10",
   "livekit_room_name": "room-username",
+  "suspended": false,
   "settings": {
     "members_only": false,
     "allow_anonymous_guests": true,

@@ -33,12 +33,13 @@ async function readPolicy(roomId, identity) {
 
 // Prefer newer pushed facts when a Laravel join response races with a policy update.
 function validateAdmission(roomId, snapshot) {
+    const cachedRoom = state.getRoom(roomId);
     const revision = state.getRoomRevision(roomId);
     if (revision && BigInt(revision.version) > BigInt(snapshot.version)) {
-        return revision.suspended ? 'ROOM_SUSPENDED' : 'POLICY_STALE';
+        if (revision.suspended) return 'ROOM_SUSPENDED';
+        if (!cachedRoom || BigInt(cachedRoom.version) < BigInt(revision.version)) return 'POLICY_STALE';
     }
 
-    const cachedRoom = state.getRoom(roomId);
     const cachedUser = state.getUser(roomId, snapshot.user.id);
     const room = cachedRoom && BigInt(cachedRoom.version) > BigInt(snapshot.version)
         ? cachedRoom : {

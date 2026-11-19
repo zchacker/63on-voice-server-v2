@@ -28,6 +28,7 @@ function connection(t, io, roomId, userId = '42', options = {}) {
         state.removeConnection(roomId, userId, socket.id);
         roomState.removeRoomUser(roomId, socket.id);
         moderation.clearRoom(roomId);
+        state.clearRoomRevision(roomId);
     });
     return socket;
 }
@@ -47,10 +48,28 @@ test.beforeEach((t) => {
     t.mock.method(laravel, 'notifyRoomPresence', async () => true);
     t.mock.method(livekit, 'updateParticipantPermissions', async () => ({ updated: true }));
     t.mock.method(livekit, 'removeActiveParticipant', async () => ({ removed: true }));
+    t.mock.method(livekit, 'removeAllParticipants', async () => ({ removed: 0 }));
 });
 test.afterEach(() => state.clearTimers());
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('an existing authenticated Socket session preserves Laravel ROOM_SUSPENDED denial on rejoin', async (t) => {
+    const io = environment();
+    const socket = {
+        id: 'old-session-socket', authenticatedUserId: '42', connected: true, events: [],
+        emit(event, data) { this.events.push({ event, data }); }
+    };
+    t.mock.method(laravel, 'authorizeRoomJoin', async () => {
+        throw new laravel.LaravelServiceError('ROOM_SUSPENDED', 'Room suspended.', 403);
+    });
+
+    await rooms.joinRoom(io, socket, { roomId: 'administratively-suspended-room' });
+
+    assert.equal(socket.events.at(-1).event, 'joinRoomRejected');
+    assert.equal(socket.events.at(-1).data.code, 'ROOM_SUSPENDED');
+    assert.equal(socket.roomId, undefined);
+});
 
 test('messages and microphone reservations use memory and bypass a blocked room queue', async (t) => {
     const io = environment();
@@ -131,6 +150,127 @@ test('targeted updates do not notify unrelated users, and stale per-user events 
     assert.ok(first.connected);
 });
 
+test('room suspension disconnects all Socket roles, cancels pending joins and sweeps every LiveKit identity', async (t) => {
+    for (const [key, value] of Object.entries({
+        LIVEKIT_URL: 'wss://example.invalid', LIVEKIT_API_KEY: 'test', LIVEKIT_API_SECRET: 'test-secret'
+    })) {
+        const previous = process.env[key];
+        process.env[key] = value;
+        t.after(() => previous === undefined ? delete process.env[key] : process.env[key] = previous);
+    }
+
+    const io = environment();
+    const ordinaryA = connection(t, io, io.roomId, '42');
+    const ordinaryB = connection(t, io, io.roomId, '42');
+    const owner = connection(t, io, io.roomId, '1');
+    const moderator = connection(t, io, io.roomId, '5', { user: { role: 'fixed_moderator' } });
+    const pending = {
+        id: 'pending-socket', pendingRoomId: 'livekit-' + io.roomId,
+        roomJoinAttempt: 1, connected: true, events: [],
+        emit(event, data) { this.events.push({ event, data }); }
+    };
+    io.sockets.sockets.set(pending.id, pending);
+
+    livekit.removeAllParticipants.mock.restore();
+    const removed = [];
+    t.mock.method(RoomServiceClient.prototype, 'listParticipants', async () => [
+        { identity: '42' },
+        { identity: 'livekit-only' },
+        { identity: 'admin-listen:00000000-0000-4000-8000-000000000001', permission: { hidden: true } }
+    ]);
+    t.mock.method(RoomServiceClient.prototype, 'removeParticipant', async (_room, identity) => {
+        removed.push(identity);
+    });
+
+    policy.applyUpdate(io, io.roomId, fixture.snapshot(io.roomId, null, {
+        version: '1', suspended: true
+    }));
+    await flush();
+
+    for (const socket of [ordinaryA, ordinaryB, owner, moderator]) {
+        assert.equal(socket.connected, false);
+        assert.equal(socket.roomId, null);
+        assert.ok(socket.events.some((event) => event.event === 'kicked'
+            && event.data.reason === 'ROOM_SUSPENDED'));
+    }
+    assert.equal(pending.roomJoinAttempt, 2);
+    assert.equal(pending.events.at(-1).event, 'joinRoomRejected');
+    assert.equal(pending.events.at(-1).data.code, 'ROOM_SUSPENDED');
+    const guest = {
+        id: 'anonymous-guest', connected: true, events: [],
+        emit(event, data) { this.events.push({ event, data }); }
+    };
+    await rooms.joinRoom(io, guest, { roomId: 'livekit-' + io.roomId });
+    assert.equal(guest.events.at(-1).data.code, 'ROOM_SUSPENDED');
+    assert.deepEqual(removed, [
+        '42',
+        'livekit-only',
+        'admin-listen:00000000-0000-4000-8000-000000000001'
+    ]);
+    assert.ok(io.broadcasts.filter((event) => event.event === 'userList')
+        .every((event) => event.data.every((user) => user.userId !== 'admin-listen:00000000-0000-4000-8000-000000000001')));
+    assert.ok(laravel.notifyRoomPresence.mock.calls.every((call) =>
+        call.arguments[1].userId !== 'admin-listen:00000000-0000-4000-8000-000000000001'));
+    assert.ok(laravel.notifyRoomPresence.mock.calls.length >= 4);
+});
+
+test('suspension versions use BigInt, ignore duplicate and stale events, and reactivation does not restore sockets', async (t) => {
+    const io = environment();
+    const socket = connection(t, io, io.roomId);
+    let sweeps = 0;
+    livekit.removeAllParticipants = async () => { sweeps++; return { removed: 0 }; };
+    const version = '9007199254740993';
+
+    policy.applyUpdate(io, io.roomId, fixture.snapshot(io.roomId, null, {
+        version, suspended: true
+    }));
+    policy.applyUpdate(io, io.roomId, fixture.snapshot(io.roomId, null, {
+        version, suspended: true
+    }));
+    policy.applyUpdate(io, io.roomId, fixture.snapshot(io.roomId, null, {
+        version: '9007199254740992', suspended: false
+    }));
+    await flush();
+
+    assert.equal(socket.connected, false);
+    assert.equal(policy.getRoomSuspension(io.roomId).version, version);
+    assert.equal(policy.getRoomSuspension(io.roomId).suspended, true);
+    assert.equal(sweeps, 1);
+
+    policy.applyUpdate(io, io.roomId, fixture.snapshot(io.roomId, null, {
+        version: '9007199254740994', suspended: false
+    }));
+    assert.equal(socket.connected, false);
+    assert.equal(roomState.getRoomUsers(io.roomId).length, 0);
+    assert.equal(policy.validateAdmission(io.roomId, fixture.snapshot(io.roomId, '42', {
+        version: '9007199254740994'
+    })), null);
+    assert.equal(policy.validateAdmission(io.roomId, fixture.snapshot(io.roomId, '42', {
+        version: '9007199254740995', user: { banned: true }
+    })), 'USER_BANNED');
+});
+
+test('failed room-wide LiveKit removal retries through the bounded media queue', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const io = environment();
+    let attempts = 0;
+    livekit.removeAllParticipants = async () => {
+        attempts++;
+        if (attempts === 1) throw Object.assign(new Error('temporary failure'), { code: 'TEMPORARY_FAILURE' });
+        return { removed: 1 };
+    };
+
+    policy.applyUpdate(io, io.roomId, fixture.snapshot(io.roomId, null, {
+        version: '1', suspended: true
+    }));
+    await flush();
+    assert.equal(attempts, 1);
+
+    t.mock.timers.tick(500);
+    await flush();
+    assert.equal(attempts, 2);
+});
+
 test('a blocked LiveKit update does not delay policy application or message delivery', async (t) => {
     const io = environment();
     const socket = connection(t, io, io.roomId);
@@ -184,6 +324,9 @@ test('only the affected mute deadline schedules an expiry update, without Larave
 test('malformed snapshots and mismatched identities fail closed', async (t) => {
     const io = environment();
     assert.throws(() => policy.applyUpdate(io, io.roomId, {}), { code: 'INVALID_LARAVEL_POLICY' });
+    const missingSuspension = fixture.snapshot(io.roomId, null, { version: '1' });
+    delete missingSuspension.suspended;
+    assert.throws(() => policy.applyUpdate(io, io.roomId, missingSuspension), { code: 'INVALID_LARAVEL_POLICY' });
     const value = fixture.response(io.roomId, '43');
     laravel.readRoomPolicy = async () => value;
     await assert.rejects(policy.readPolicy(io.roomId, { user_id: '42' }), { code: 'INVALID_LARAVEL_IDENTITY' });
@@ -316,6 +459,10 @@ test('temporary moderator promotion refreshes only the target without any policy
         assert.equal(permissions.message_max_length, null);
         assert.equal(permissions.message_interval_seconds, null);
         assert.equal(permissions.can_message, true);
+        const suspended = resolve(settings, { role, is_member: false }, true, false, true);
+        assert.equal(suspended.entry_error, 'ROOM_SUSPENDED');
+        assert.equal(suspended.can_publish, false);
+        assert.equal(suspended.can_message, false);
     }
     assert.equal(resolve(settings, { role: 'normal', is_member: false }, false, false).message_max_length, 2);
 });

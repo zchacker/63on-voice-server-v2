@@ -40,9 +40,10 @@ function observeRoomRevision(snapshot) {
 function getRoomRevision(roomId) { return roomRevisions.get(roomId); }
 
 function getRoomSuspension(roomIdentifier) {
-    const roomId = roomRevisions.has(roomIdentifier)
-        ? roomIdentifier
-        : roomAliases.get(roomIdentifier);
+    const identifier = String(roomIdentifier);
+    const roomId = roomRevisions.has(identifier)
+        ? identifier
+        : roomAliases.get(identifier);
     return roomId ? roomRevisions.get(roomId) : undefined;
 }
 
