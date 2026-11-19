@@ -3,6 +3,7 @@ const validation = require('./room.validation');
 const moderation = require('../moderation/moderation.service');
 const laravel = require('../../services/laravel.service');
 const policy = require('./room-policy.service');
+const { errorMessage, roomAccessMessage } = require('../../services/error-messages');
 
 function emitError(socket, event, result) {
     socket.emit(event, { code: result.code, message: result.message });
@@ -16,7 +17,7 @@ function rejectJoin(socket, result) {
         roomId,
         userId: socket.authenticatedUserId || null,
         code: result.code,
-        message: result.message
+        message: errorMessage(result.code, result.message)
     });
 }
 
@@ -98,10 +99,10 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
         if (!isCurrentJoin(socket, attempt)) return;
         const admissionError = policy.validateAdmission(roomId, roomPolicy.snapshot);
         if (admissionError) {
-            throw new laravel.LaravelServiceError(admissionError, 'Room access is restricted.', 403);
+            throw new laravel.LaravelServiceError(admissionError, roomAccessMessage(admissionError), 403);
         }
         if (roomPolicy.permissions.entry_error) {
-            throw new laravel.LaravelServiceError(roomPolicy.permissions.entry_error, 'Room access is restricted.', 403);
+            throw new laravel.LaravelServiceError(roomPolicy.permissions.entry_error, roomAccessMessage(roomPolicy.permissions.entry_error), 403);
         }
         const user = {
             userId,
@@ -120,7 +121,7 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
         const latestAdmissionError = policy.validateAdmission(roomId, roomPolicy.snapshot);
         if (latestAdmissionError) {
             if (socket.roomId !== roomId) socket.leave(roomId);
-            throw new laravel.LaravelServiceError(latestAdmissionError, 'Room access is restricted.', 403);
+            throw new laravel.LaravelServiceError(latestAdmissionError, roomAccessMessage(latestAdmissionError), 403);
         }
 
         socket.roomPolicy = roomPolicy;

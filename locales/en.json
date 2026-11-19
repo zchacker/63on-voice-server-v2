@@ -1,0 +1,5 @@
+{
+  "ROOM_ACCESS_RESTRICTED": "Room access is restricted.",
+  "ROOM_SUSPENDED": "This room is administratively suspended.",
+  "USER_BANNED": "You are banned from this room."
+}
