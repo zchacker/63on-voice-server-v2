@@ -61,6 +61,50 @@ async function removeActiveParticipant(roomName, identity) {
     }
 }
 
+// Remove every identity returned by LiveKit, including participants marked hidden.
+async function removeAllParticipants(roomName) {
+    if (typeof roomName !== 'string' || !roomName.trim()) {
+        throw new Error('A trusted LiveKit room is required.');
+    }
+
+    const client = getClient();
+    let participants;
+    try {
+        participants = await client.listParticipants(roomName);
+    } catch (error) {
+        if (error.code === 'not_found') return { removed: 0 };
+        throw error;
+    }
+    if (!Array.isArray(participants)) {
+        throw new Error('LiveKit returned an invalid participant list.');
+    }
+
+    let removed = 0;
+    const failures = [];
+    for (const participant of participants) {
+        if (typeof participant?.identity !== 'string' || !participant.identity.trim()) {
+            failures.push(new Error('LiveKit returned a participant without an identity.'));
+            continue;
+        }
+
+        try {
+            await client.removeParticipant(roomName, participant.identity);
+            removed++;
+        } catch (error) {
+            if (error.code === 'not_found') continue;
+            failures.push(error);
+        }
+    }
+
+    if (failures.length) {
+        const error = new AggregateError(failures, 'LiveKit could not remove every room participant.');
+        error.code = failures[0].code || 'LIVEKIT_REMOVE_ALL_FAILED';
+        throw error;
+    }
+
+    return { removed };
+}
+
 // Read one participant instead of repeatedly downloading the entire room participant list.
 async function updateParticipantPermissions(roomName, identity, permissions) {
     if (typeof roomName !== 'string' || !roomName.trim() || typeof identity !== 'string' || !identity.trim())
@@ -86,4 +130,4 @@ async function updateParticipantPermissions(roomName, identity, permissions) {
     return { updated: true };
 }
 
-module.exports = { removeActiveParticipant, updateParticipantPermissions };
+module.exports = { removeActiveParticipant, removeAllParticipants, updateParticipantPermissions };

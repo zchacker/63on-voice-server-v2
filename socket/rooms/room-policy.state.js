@@ -3,7 +3,48 @@ const expiryTimers = new Map();
 const cooldowns = new Map();
 const mediaJobs = new Map();
 const readyMedia = new Set();
+const roomRevisions = new Map();
+const roomAliases = new Map();
 let activeMediaJobs = 0;
+
+// Keep room suspension versions after the last Socket leaves so delayed callbacks stay harmless.
+function observeRoomRevision(snapshot) {
+    const roomId = snapshot.room_id;
+    const current = roomRevisions.get(roomId);
+    const room = rooms.get(roomId);
+    const currentVersion = current?.version || room?.version;
+
+    if (currentVersion && BigInt(snapshot.version) <= BigInt(currentVersion)) {
+        return { accepted: false, changed: false, current };
+    }
+
+    const previousSuspended = current?.suspended ?? room?.suspended ?? false;
+    roomRevisions.set(roomId, {
+        version: snapshot.version,
+        suspended: snapshot.suspended,
+        liveKitRoomName: snapshot.livekit_room_name
+    });
+
+    if (current?.liveKitRoomName && roomAliases.get(current.liveKitRoomName) === roomId) {
+        roomAliases.delete(current.liveKitRoomName);
+    }
+    roomAliases.set(snapshot.livekit_room_name, roomId);
+
+    return {
+        accepted: true,
+        changed: previousSuspended !== snapshot.suspended,
+        suspended: snapshot.suspended
+    };
+}
+
+function getRoomRevision(roomId) { return roomRevisions.get(roomId); }
+
+function getRoomSuspension(roomIdentifier) {
+    const roomId = roomRevisions.has(roomIdentifier)
+        ? roomIdentifier
+        : roomAliases.get(roomIdentifier);
+    return roomId ? roomRevisions.get(roomId) : undefined;
+}
 
 // Keep one room snapshot and independently versioned facts for each admitted user.
 function applySnapshot(snapshot) {
@@ -16,11 +57,13 @@ function applySnapshot(snapshot) {
     const changes = { room: false, user: false };
     if (BigInt(snapshot.version) > BigInt(room.version)) {
         changes.room = !room.settings || JSON.stringify(room.settings) !== JSON.stringify(snapshot.settings)
-            || room.messagesLocked !== snapshot.messages_locked;
+            || room.messagesLocked !== snapshot.messages_locked
+            || room.suspended !== snapshot.suspended;
         Object.assign(room, {
             version: snapshot.version,
             settings: snapshot.settings,
             messagesLocked: snapshot.messages_locked,
+            suspended: snapshot.suspended,
             liveKitRoomName: snapshot.livekit_room_name
         });
     }
@@ -102,11 +145,13 @@ function reserveMessage(roomId, userId, seconds) {
 }
 
 function mediaKey(roomId, userId) { return timerKey(roomId, userId); }
+function roomMediaKey(roomId) { return timerKey(roomId, { roomRemoval: true }); }
 function getMediaJob(roomId, userId) { return mediaJobs.get(mediaKey(roomId, userId)); }
+function getRoomMediaJob(roomId) { return mediaJobs.get(roomMediaKey(roomId)); }
 
 // Coalesce pending media changes while preserving ordering for each participant.
 function enqueueMedia(task) {
-    const key = mediaKey(task.roomId, task.userId);
+    const key = task.removeAll ? roomMediaKey(task.roomId) : mediaKey(task.roomId, task.userId);
     let job = mediaJobs.get(key);
     if (!job) {
         job = { key, running: false, attempts: 0, timer: null };
@@ -158,8 +203,17 @@ function clearTimers() {
     cooldowns.clear();
 }
 
+function clearRoomRevision(roomId) {
+    const revision = roomRevisions.get(roomId);
+    if (revision && roomAliases.get(revision.liveKitRoomName) === roomId) {
+        roomAliases.delete(revision.liveKitRoomName);
+    }
+    roomRevisions.delete(roomId);
+}
+
 module.exports = {
-    applySnapshot, getRoom, getUser, addConnection, removeConnection,
+    applySnapshot, observeRoomRevision, getRoomRevision, getRoomSuspension,
+    getRoomMediaJob, clearRoomRevision, getRoom, getUser, addConnection, removeConnection,
     setExpiry, retryAfter, reserveMessage,
     getMediaJob, enqueueMedia, takeMediaJob, finishMediaJob, clearTimers
 };
