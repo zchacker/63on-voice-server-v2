@@ -35,6 +35,7 @@ joinRoomRejected includes roomId, userId, code, and message. Codes include:
 - INVALID_ROOM_ID: roomId is neither a non-empty string nor a positive safe integer.
 - AUTHENTICATION_REQUIRED: the handshake did not contain a valid Socket JWT.
 - USER_BANNED, ROOM_NOT_FOUND, ROOM_INACTIVE, USER_NOT_FOUND, JOIN_NOT_ALLOWED: Laravel denied the join.
+- ROOM_SUSPENDED: Laravel or the latest room policy snapshot marks the room administratively suspended; this also applies to owners and moderators.
 - LARAVEL_TIMEOUT, LARAVEL_UNAVAILABLE, SOCKET_CONFIGURATION_MISSING: Node could not complete the internal Laravel authorization call.
 - INVALID_LARAVEL_RESPONSE or INVALID_LARAVEL_IDENTITY: Laravel returned a malformed decision or a user ID that did not match JWT sub.
 
@@ -43,6 +44,8 @@ If a request to join a new room is denied, the socket stays in its previously jo
 ## Behavior notes
 
 Laravel is the source of truth for user profile and persistent room state. Different accepted identifiers for the same room resolve to one Socket.IO room. Server event roomId values are the canonical ID as a string; use that ID for subsequent moderation commands. The in-memory ban check is not used to authorize joins.
+
+An unauthenticated Socket client is rejected because guest Socket admission is unsupported. If the latest cached room snapshot is suspended, the client receives `ROOM_SUSPENDED` before the generic authentication rejection.
 
 ## Source
 

@@ -50,6 +50,14 @@ Authenticate with `Authorization: Bearer <SOCKET_INTERNAL_SERVICE_TOKEN>`. Larav
 
 Node returns HTTP 200 `{success:true,roomId,version}` after applying local state. This acknowledges local application, not LiveKit completion. Failed/missing/mismatched acknowledgements remain pending in Laravel. `socket:deliver-room-policy` retries up to 100 pending events per invocation, with retry delays from 5 to 300 seconds and no connected-user scan. The Laravel scheduler runs this command every minute; it must be enabled. Attempts may be duplicated; consumers are idempotent. The event table retains delivered versions as well as pending events; do not purge it without a revision watermark/retention design.
 
+## Administrative room suspension
+
+Every snapshot includes a required top-level boolean `suspended`. Node compares decimal-string versions as `BigInt`, remembers the latest room suspension revision after Socket membership becomes empty, and ignores duplicate or older snapshots. When suspended, new authenticated joins and cached anonymous attempts are rejected with `ROOM_SUSPENDED`, pending joins are cancelled, and every Socket connection in the room is disconnected with a `left` presence transition. Owners and moderators receive no exemption. Anonymous Socket admission remains unsupported.
+
+The same transition queues a room-wide LiveKit sweep. The Server SDK lists the room participants and Node attempts to remove every returned identity without filtering `hidden`; this includes `admin-listen:{uuid}` identities and participants with no Socket connection. The sweep emits no Socket user, visit, or presence event for LiveKit-only identities. The policy-refresh HTTP 200 means the local suspension was accepted and the LiveKit job was queued; it does **not** confirm the sweep completed. Failures retry through the existing bounded in-memory media queue. Those retry jobs are lost if Node restarts.
+
+When `suspended` becomes false, Node clears only the room-wide suspension. It does not rejoin participants or clear a user's separate room ban, mute, or membership restriction. A fresh admission reads the current Laravel policy. A valid LiveKit token issued before suspension can still reconnect until expiry unless the deployed LiveKit admission path/webhook blocks it. `listParticipants` behavior for hidden participants must be verified against the actual server build before enabling `LIVEKIT_ADMIN_LISTENING_VERIFIED`.
+
 ## Client behavior
 
 `roomPolicyUpdated` is private to affected sockets and contains `{roomId,settings,permissions}`. The effective permissions include `entry_error,role,is_member,can_publish,can_message,direct_data_allowed,links_allowed,message_max_length,message_interval_seconds`. Welcome/rules are plain text. Existing microphone/role events remain supported.
@@ -60,7 +68,7 @@ Changing `members_only` gates new admission. Existing visitors keep their admiss
 
 ## LiveKit and deployment
 
-Only changed media rights trigger LiveKit work. Jobs are coalesced per participant, run with at most eight concurrent operations, and retry only failed operations with backoff. They do not occupy the room command/message queue. A newer desired state supersedes queued older work; active operations finish before newer work for the same participant. The adapter reads one participant rather than the full room list, and preserves unrelated grants including `hidden` and `recorder`. There is no trusted platform-observer admission contract yet.
+Only changed media rights trigger LiveKit permission work. Jobs are coalesced per participant, run with at most eight concurrent operations, and retry failed operations with backoff. They do not occupy the room command/message queue. A newer desired state supersedes queued older work; active operations finish before newer work for the same participant. Permission updates read one participant and preserve unrelated grants including `hidden` and `recorder`; room suspension separately lists and removes all identities.
 
 Before enabling this release:
 
@@ -69,6 +77,6 @@ Before enabling this release:
 3. Deploy both projects together. Node requires the new `/policy` snapshot fields. The previous empty-body 202 callback contract is replaced by versioned snapshots and HTTP 200 acknowledgements.
 4. Test real Laravel/Node/LiveKit integration under realistic room sizes and reconnects. No million-connection capacity claim is made by these changes.
 
-Known boundaries: room state and slow-mode reservations remain single-process, as requested; multiple Node processes need room ownership/shared state and notification fanout before horizontal scaling. Media retry jobs are in memory and do not survive a process restart; fresh admissions resynchronize connected users. New LiveKit token TTL remains 600 seconds; old tokens are not revoked. Self-hosted LiveKit can accept an older token after removal. Coordinate legacy-token drainage and add trusted LiveKit participant-join enforcement for direct/old-token clients before claiming instantaneous production-wide bans. A Node crash still has no presence heartbeat to close old visits. Anonymous visits and trusted hidden platform observer admission remain deferred.
+Known boundaries: room state, revision watermarks, and slow-mode reservations remain process-local; multiple Node processes need room ownership/shared state and notification fanout before horizontal scaling. LiveKit retry jobs are in memory and do not survive a process restart. New LiveKit token TTL remains 600 seconds; old tokens are not revoked, and self-hosted LiveKit may accept a valid older token after removal. The repository does not identify or verify the deployed LiveKit Server version. Confirm the actual server build, hidden participant listing behavior, webhook/admission policy, and old-token expiry before enabling `LIVEKIT_ADMIN_LISTENING_VERIFIED`. A Node crash still has no presence heartbeat to close old visits. Anonymous Socket admission remains unsupported.
 
 Owner, fixed moderators and verified temporary moderators bypass the room-specific message length, slow mode, group message restrictions and visitor link filtering. The global 10,000-code-point input limit still applies.

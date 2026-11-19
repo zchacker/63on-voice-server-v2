@@ -23,8 +23,8 @@
 | messageRejected | مرسل الرسالة | { code, message }؛ NOT_IN_ROOM أو MESSAGES_DISABLED أو INVALID_MESSAGE. |
 | sendGift | الغرفة | { gift, user }. |
 | giftRejected | مرسل الهدية | { code: "NOT_IN_ROOM", message }. |
-| joinRoomRejected | طالب الانضمام | { roomId, userId, code, message }؛ لأخطاء JWT أو رفض Laravel أو إعداد الخادم. |
-| kicked | المستخدم المطرود | { roomId, userId, reason }؛ يمكن أن تكون reason مساوية null. |
+| joinRoomRejected | طالب الانضمام | { roomId, userId, code, message }؛ يتضمن `ROOM_SUSPENDED` عند الإيقاف الإداري للغرفة. |
+| kicked | المستخدم المطرود | { roomId, userId, reason }؛ يمكن أن تكون reason مساوية null أو `ROOM_SUSPENDED`. |
 | userBanned | الغرفة | { roomId, userId }. |
 | userUnbanned | الغرفة | { roomId, userId }. |
 | userRemoved | الغرفة | { roomId, userId }. |

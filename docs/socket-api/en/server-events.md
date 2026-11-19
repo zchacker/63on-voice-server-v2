@@ -23,8 +23,8 @@ The server emits these events. Payloads below reflect current code.
 | messageRejected | Sending user | { code, message }; NOT_IN_ROOM, MESSAGES_DISABLED, or INVALID_MESSAGE. |
 | sendGift | Room | { gift, user }. |
 | giftRejected | Sending user | { code: "NOT_IN_ROOM", message }. |
-| joinRoomRejected | Joining user | { roomId, userId, code, message }; reports JWT, Laravel authorization, or configuration errors. |
-| kicked | Removed target | { roomId, userId, reason }; reason may be null. |
+| joinRoomRejected | Joining user | { roomId, userId, code, message }; includes `ROOM_SUSPENDED` for administrative room suspension. |
+| kicked | Removed target | { roomId, userId, reason }; reason may be null or `ROOM_SUSPENDED`. |
 | userBanned | Room | { roomId, userId }. |
 | userUnbanned | Room | { roomId, userId }. |
 | userRemoved | Room | { roomId, userId }. |
