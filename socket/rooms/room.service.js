@@ -23,6 +23,16 @@ function rejectJoin(socket, result) {
 function joinRoom(io, socket, payload) {
     const attempt = (socket.roomJoinAttempt || 0) + 1;
     socket.roomJoinAttempt = attempt;
+    const suspension = policy.getRoomSuspension(String(payload?.roomId ?? ''));
+    if (suspension?.suspended) {
+        socket.pendingRoomId = String(payload.roomId);
+        rejectJoin(socket, {
+            code: 'ROOM_SUSPENDED',
+            message: 'This room is administratively suspended.'
+        });
+        return Promise.resolve();
+    }
+
     const checked = validation.validateJoin(payload, socket.authenticatedUserId);
     socket.pendingRoomId = checked.roomId || null;
     if (!checked.valid) {
@@ -84,6 +94,12 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
             identity.role = 'temporary_moderator';
         const roomPolicy = await policy.readPolicy(roomId, identity);
         if (!isCurrentJoin(socket, attempt)) return;
+        policy.applyUpdate(io, roomId, roomPolicy.snapshot);
+        if (!isCurrentJoin(socket, attempt)) return;
+        const admissionError = policy.validateAdmission(roomId, roomPolicy.snapshot);
+        if (admissionError) {
+            throw new laravel.LaravelServiceError(admissionError, 'Room access is restricted.', 403);
+        }
         if (roomPolicy.permissions.entry_error) {
             throw new laravel.LaravelServiceError(roomPolicy.permissions.entry_error, 'Room access is restricted.', 403);
         }
@@ -101,10 +117,10 @@ async function completeJoin(io, socket, requestedRoomId, attempt, version) {
             return;
         }
 
-        const admissionError = policy.validateAdmission(roomId, roomPolicy.snapshot);
-        if (admissionError) {
+        const latestAdmissionError = policy.validateAdmission(roomId, roomPolicy.snapshot);
+        if (latestAdmissionError) {
             if (socket.roomId !== roomId) socket.leave(roomId);
-            throw new laravel.LaravelServiceError(admissionError, 'Room access is restricted.', 403);
+            throw new laravel.LaravelServiceError(latestAdmissionError, 'Room access is restricted.', 403);
         }
 
         socket.roomPolicy = roomPolicy;

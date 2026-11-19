@@ -35,6 +35,7 @@
 - INVALID_ROOM_ID: roomId ليس نصًا غير فارغ ولا عددًا صحيحًا موجبًا وآمنًا.
 - AUTHENTICATION_REQUIRED: لم يحتو handshake على JWT صالح للسوكيت.
 - USER_BANNED أو ROOM_NOT_FOUND أو ROOM_INACTIVE أو USER_NOT_FOUND أو JOIN_NOT_ALLOWED: رفض Laravel الانضمام.
+- ROOM_SUSPENDED: يحدد Laravel أو أحدث snapshot أن الغرفة موقوفة إداريًا، ويشمل ذلك المالك والمشرف.
 - LARAVEL_TIMEOUT أو LARAVEL_UNAVAILABLE أو SOCKET_CONFIGURATION_MISSING: تعذر على Node إكمال طلب التحقق الداخلي من Laravel.
 - INVALID_LARAVEL_RESPONSE أو INVALID_LARAVEL_IDENTITY: أعاد Laravel قرارًا غير صالح أو معرف مستخدم لا يطابق sub.
 
@@ -43,6 +44,8 @@
 ## ملاحظات
 
 Laravel هو مصدر بيانات الملف الشخصي وحالة الغرفة الدائمة. تصل المعرّفات المقبولة المختلفة للغرفة نفسها إلى غرفة Socket.IO واحدة. تكون roomId في أحداث الخادم هي معرف قاعدة البيانات كنص؛ استخدمها في أوامر الإشراف التالية. لا يستخدم الانضمام حظر الذاكرة المحلية لاتخاذ قرار السماح.
+
+يُرفض اتصال Socket غير المسجل لأن دخول الضيوف غير مدعوم. إذا كان أحدث snapshot محفوظ للغرفة يبين أنها موقوفة، فيُعاد `ROOM_SUSPENDED` قبل رفض المصادقة العام.
 
 ## المصدر
 

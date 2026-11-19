@@ -19,6 +19,7 @@ function validateSnapshot(snapshot, roomId) {
         || typeof snapshot.version !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(snapshot.version)
         || typeof snapshot.livekit_room_name !== 'string' || !snapshot.livekit_room_name.trim()
         || typeof snapshot.messages_locked !== 'boolean'
+        || typeof snapshot.suspended !== 'boolean'
         || !settings || !BOOLEAN_SETTINGS.every((key) => typeof settings[key] === 'boolean')
         || !validNumber(settings.message_max_length, 10000)
         || !validNumber(settings.message_interval_seconds, 3600)
@@ -52,21 +53,21 @@ function active(flag, until, now) {
 }
 
 // Existing visitors retain admission when members_only changes; bans still take effect.
-function resolvePermissions(settings, facts, messagesLocked, temporary, now = Date.now()) {
+function resolvePermissions(settings, facts, messagesLocked, temporary, suspended = false, now = Date.now()) {
     const role = facts.role === 'normal' && temporary ? 'temporary_moderator' : facts.role;
     const staff = role !== 'normal';
     const banned = active(facts.banned, facts.banned_until, now);
     const prefix = facts.is_member ? 'member' : 'visitor';
-    const canMessage = !banned && (staff || (!messagesLocked
+    const canMessage = !suspended && !banned && (staff || (!messagesLocked
         && !active(facts.messages_muted, facts.messages_muted_until, now) && settings[prefix + '_messages_allowed']));
     const linksAllowed = staff || facts.is_member || settings.visitor_links_allowed;
     const interval = staff ? null : settings.message_interval_seconds;
 
     return {
-        entry_error: banned ? 'USER_BANNED' : null,
+        entry_error: suspended ? 'ROOM_SUSPENDED' : (banned ? 'USER_BANNED' : null),
         role,
         is_member: facts.is_member,
-        can_publish: !banned && (staff || (settings[prefix + '_mic_allowed'] && !active(facts.mic_muted, facts.mic_muted_until, now))),
+        can_publish: !suspended && !banned && (staff || (settings[prefix + '_mic_allowed'] && !active(facts.mic_muted, facts.mic_muted_until, now))),
         can_message: canMessage,
         direct_data_allowed: canMessage && settings.message_max_length === null && interval === null && linksAllowed,
         links_allowed: linksAllowed,

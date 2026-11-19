@@ -34,12 +34,22 @@ async function readPolicy(roomId, identity) {
 // Prefer newer pushed facts when a Laravel join response races with a policy update.
 function validateAdmission(roomId, snapshot) {
     const cachedRoom = state.getRoom(roomId);
+    const revision = state.getRoomRevision(roomId);
+    if (revision && BigInt(revision.version) > BigInt(snapshot.version)) {
+        if (revision.suspended) return 'ROOM_SUSPENDED';
+        if (!cachedRoom || BigInt(cachedRoom.version) < BigInt(revision.version)) return 'POLICY_STALE';
+    }
+
     const cachedUser = state.getUser(roomId, snapshot.user.id);
     const room = cachedRoom && BigInt(cachedRoom.version) > BigInt(snapshot.version)
-        ? cachedRoom : { settings: snapshot.settings, messagesLocked: snapshot.messages_locked };
+        ? cachedRoom : {
+            settings: snapshot.settings,
+            messagesLocked: snapshot.messages_locked,
+            suspended: snapshot.suspended
+        };
     const facts = cachedUser && BigInt(cachedUser.version) > BigInt(snapshot.version) ? cachedUser.facts : snapshot.user;
     const temporary = moderationState.getCommandActorRole(roomId, facts.id) === 'temporary_moderator';
-    const permissions = validation.resolvePermissions(room.settings, facts, room.messagesLocked, temporary);
+    const permissions = validation.resolvePermissions(room.settings, facts, room.messagesLocked, temporary, room.suspended);
 
     if (permissions.entry_error) return permissions.entry_error;
     if (room.settings.members_only && !facts.is_member && permissions.role === 'normal') return 'MEMBERS_ONLY';
@@ -54,13 +64,14 @@ function currentPolicy(roomId, userId) {
     const temporary = moderationState.getCommandActorRole(roomId, userId) === 'temporary_moderator';
     return {
         settings: room.settings,
-        permissions: validation.resolvePermissions(room.settings, user.facts, room.messagesLocked, temporary)
+        permissions: validation.resolvePermissions(room.settings, user.facts, room.messagesLocked, temporary, room.suspended)
     };
 }
 
 // Register one admitted connection and apply its cached policy without awaiting LiveKit.
 function syncJoinedParticipant(io, socket) {
     const snapshot = socket.roomPolicy.snapshot;
+    state.observeRoomRevision(snapshot);
     const changes = state.applySnapshot(snapshot);
     state.addConnection(socket.roomId, socket.authenticatedUserId, socket.id);
     socket.roomPolicy = null;
@@ -76,24 +87,36 @@ function applyUpdate(io, roomId, snapshot) {
     const checked = validation.validateSnapshot(snapshot, roomId);
     if (!checked.valid) throw new laravel.LaravelServiceError(checked.code, checked.message, 422);
 
+    const revision = state.observeRoomRevision(snapshot);
     const room = state.getRoom(roomId);
     if (!room) {
-        if (snapshot.user && state.getMediaJob(roomId, snapshot.user.id)) {
+        if (revision.accepted && revision.changed && snapshot.suspended) {
+            cancelPendingRoomJoins(io, roomId, snapshot.livekit_room_name);
+            queueRoomRemoval(snapshot);
+        }
+        if (revision.accepted && snapshot.user && !snapshot.suspended
+            && state.getMediaJob(roomId, snapshot.user.id)) {
             queueMedia(snapshot, snapshot.user, validation.resolvePermissions(
-                snapshot.settings, snapshot.user, snapshot.messages_locked, false
+                snapshot.settings, snapshot.user, snapshot.messages_locked, false, snapshot.suspended
             ));
         }
         return;
     }
 
+    if (!revision.accepted && !snapshot.user) return;
     const changes = state.applySnapshot(snapshot);
     if (changes.room) refreshRoomParticipants(io, roomId);
     else if (changes.user) refreshUser(io, roomId, snapshot.user.id);
 
+    if (revision.accepted && revision.changed && snapshot.suspended) {
+        cancelPendingRoomJoins(io, roomId, snapshot.livekit_room_name);
+        queueRoomRemoval(snapshot);
+    }
+
     if (snapshot.user && !state.getUser(roomId, snapshot.user.id)?.socketIds.size) {
-        if (state.getMediaJob(roomId, snapshot.user.id)) {
+        if (!snapshot.suspended && state.getMediaJob(roomId, snapshot.user.id)) {
             queueMedia(snapshot, snapshot.user, validation.resolvePermissions(
-                snapshot.settings, snapshot.user, snapshot.messages_locked, false
+                snapshot.settings, snapshot.user, snapshot.messages_locked, false, snapshot.suspended
             ));
         }
         state.removeConnection(roomId, snapshot.user.id, null);
@@ -132,11 +155,12 @@ function refreshUser(io, roomId, userId) {
         if (!socket || socket.roomId !== roomId || socket.authenticatedUserId !== userId) continue;
 
         const previous = socket.roomPolicy?.permissions;
-        if (data.permissions.entry_error === 'USER_BANNED') {
-            socket.emit('kicked', { roomId, userId, reason: 'USER_BANNED' });
-            require('./room.service').leaveRoom(io, socket, 'ban');
+        if (data.permissions.entry_error) {
+            const reason = data.permissions.entry_error;
+            socket.emit('kicked', { roomId, userId, reason });
+            require('./room.service').leaveRoom(io, socket, reason === 'USER_BANNED' ? 'ban' : 'left');
             socket.disconnect(true);
-            mediaChanged = true;
+            mediaChanged ||= reason === 'USER_BANNED';
             continue;
         }
 
@@ -153,7 +177,8 @@ function refreshUser(io, roomId, userId) {
             || previous.direct_data_allowed !== data.permissions.direct_data_allowed;
     }
 
-    if (mediaChanged) queueMedia({ room_id: roomId, livekit_room_name: room.liveKitRoomName }, user.facts, data.permissions);
+    if (mediaChanged && !room.suspended)
+        queueMedia({ room_id: roomId, livekit_room_name: room.liveKitRoomName }, user.facts, data.permissions);
     scheduleMuteExpiry(io, roomId, userId, user);
 }
 
@@ -192,6 +217,35 @@ function queueMedia(snapshot, facts, permissions) {
     drainMedia();
 }
 
+function queueRoomRemoval(snapshot) {
+    state.enqueueMedia({
+        roomId: snapshot.room_id,
+        version: snapshot.version,
+        roomName: snapshot.livekit_room_name,
+        removeAll: true
+    });
+    drainMedia();
+}
+
+function cancelPendingRoomJoins(io, roomId, liveKitRoomName) {
+    for (const socket of io.sockets.sockets.values()) {
+        if (!socket.pendingRoomId
+            || (socket.pendingCanonicalRoomId !== roomId
+                && String(socket.pendingRoomId) !== roomId
+                && String(socket.pendingRoomId) !== liveKitRoomName)) continue;
+
+        socket.roomJoinAttempt = (socket.roomJoinAttempt || 0) + 1;
+        socket.pendingRoomId = null;
+        socket.pendingCanonicalRoomId = null;
+        socket.emit('joinRoomRejected', {
+            roomId,
+            userId: socket.authenticatedUserId || null,
+            code: 'ROOM_SUSPENDED',
+            message: 'This room is administratively suspended.'
+        });
+    }
+}
+
 function drainMedia() {
     let job;
     while ((job = state.takeMediaJob())) runMedia(job);
@@ -201,7 +255,9 @@ async function runMedia(job) {
     const task = job.task;
     let succeeded = false;
     try {
-        if (task.remove) {
+        if (task.removeAll) {
+            await livekit.removeAllParticipants(task.roomName);
+        } else if (task.remove) {
             if (!task.bannedUntil || Date.parse(task.bannedUntil) > Date.now()) {
                 await livekit.removeActiveParticipant(task.roomName, task.userId);
             }
@@ -226,5 +282,6 @@ async function removeBannedParticipant(roomName, userId, roomId) {
 module.exports = {
     connectionIdentity, readPolicy, validateAdmission, currentPolicy,
     syncJoinedParticipant, applyUpdate, refreshRoomParticipants, refreshUser,
-    syncDetachedParticipant, releaseConnection, removeBannedParticipant
+    syncDetachedParticipant, releaseConnection, removeBannedParticipant,
+    getRoomSuspension: state.getRoomSuspension
 };

@@ -3,6 +3,7 @@ function snapshot(roomId, userId = '42', options = {}) {
         version: options.version || '0',
         room_id: roomId,
         livekit_room_name: 'livekit-' + roomId,
+        suspended: options.suspended ?? false,
         messages_locked: options.locked || false,
         settings: {
             members_only: false, allow_anonymous_guests: true,
